@@ -321,6 +321,9 @@ function initMap() {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
+  // pri zmene zoomu se meni vzdalenost popisku na obrazovce v pixelech,
+  // takze je potreba prepocitat, ktere se preskoci kvuli prekryvu
+  map.on('zoomend', () => redraw());
 }
 
 function passesNotesFilter(f) {
@@ -353,8 +356,9 @@ function midpoint(latlngs) {
   return latlngs[Math.floor(latlngs.length / 2)];
 }
 
-function labelText(c) {
-  if (c.isNew) return 'Nový úsek';
+// text popisku přímo na mapě - nikdy nepíše "Nový úsek" (viz popup),
+// u procentuálního rozdílu na novém úseku se nezobrazuje vůbec (dělení nulou)
+function tooltipLabelText(c) {
   if (c.value === null || isNaN(c.value)) return '';
   if (currentMode === 'diff_pct') {
     const sign = c.value > 0 ? '+' : '';
@@ -364,15 +368,56 @@ function labelText(c) {
   return `${sign}${fmt(c.value)}`;
 }
 
+/* ======================================================================
+   ZAMEZENÍ PŘEKRÝVÁNÍ POPISKŮ
+   Popisky se vybírají chamtivým algoritmem: seřadí se podle důležitosti
+   (tloušťka linie) a přidávají se jen ty, jejichž obdélník na obrazovce
+   nekoliduje s už umístěnými popisky. Přepočítává se při každém zoomu.
+   ====================================================================== */
+function placeNonOverlappingLabels(candidates, group) {
+  const sorted = [...candidates].sort((a, b) => b.weight - a.weight);
+  const placedBoxes = [];
+
+  sorted.forEach(cand => {
+    const pt = map.latLngToContainerPoint(cand.latlng);
+    const w = 14 + cand.text.length * 6.2;
+    const h = 18;
+    const box = { x0: pt.x - w / 2, y0: pt.y - h / 2, x1: pt.x + w / 2, y1: pt.y + h / 2 };
+
+    const overlaps = placedBoxes.some(b =>
+      box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0
+    );
+    if (overlaps) return;
+
+    placedBoxes.push(box);
+    L.tooltip({
+      permanent: true,
+      direction: 'center',
+      className: 'usek-label',
+      opacity: 0.95,
+    })
+      .setLatLng(cand.latlng)
+      .setContent(cand.text)
+      .addTo(group);
+  });
+}
+
 function redraw() {
   const styleFn = styleForMetric();
   if (geoLayer) map.removeLayer(geoLayer);
   const showLabels = document.getElementById('labelsToggle').checked;
 
   const group = L.layerGroup();
+  const labelCandidates = [];
+
   features.forEach(f => {
     if (!passesNotesFilter(f)) return;
     const style = styleFn(f);
+    const c = style.computed;
+
+    // v režimech "Intenzity" schovej úseky s nulovou hodnotou zvolené veličiny
+    if ((currentMode === 'ss' || currentMode === 'vyhl') && c.value === 0) return;
+
     const hasNotes = (notesByUsek.get(String(f.id)) || []).length > 0;
     if (hasNotes) {
       // vizuální odlišení úseků s poznámkou: jemný obrys navrch
@@ -383,21 +428,17 @@ function redraw() {
     line.addTo(group);
 
     if (showLabels) {
-      const text = labelText(style.computed);
+      const text = tooltipLabelText(c);
       if (text) {
-        L.tooltip({
-          permanent: true,
-          direction: 'center',
-          className: 'usek-label',
-          opacity: 0.95,
-        })
-          .setLatLng(midpoint(f.latlngs))
-          .setContent(text)
-          .addTo(group);
+        labelCandidates.push({ latlng: midpoint(f.latlngs), text, weight: style.weight });
       }
     }
   });
   geoLayer = group.addTo(map);
+
+  if (showLabels) {
+    placeNonOverlappingLabels(labelCandidates, group);
+  }
 }
 
 /* ======================================================================
@@ -407,7 +448,12 @@ function fmt(n) { return Math.round(n).toLocaleString('cs-CZ'); }
 
 function popupHtml(f) {
   const p = f.props;
+  const c = computeForFeature(f);
   const notes = notesByUsek.get(String(f.id)) || [];
+
+  const newBadge = (c.isNew && (currentMode === 'diff' || currentMode === 'diff_pct'))
+    ? `<div class="hint" style="margin-bottom:8px;">Nový úsek (v současném stavu nulová intenzita).</div>`
+    : '';
 
   const notesHtml = notes.length
     ? notes.map(n => `
@@ -433,6 +479,7 @@ function popupHtml(f) {
       <tr><td class="k">Nákladní – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
       <tr><td class="k">Nákladní – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
     </table>
+    ${newBadge}
     <div class="notes-list">${notesHtml}</div>
     ${formHtml}
   `;

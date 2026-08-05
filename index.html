@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://accounts.google.com/gsi/client" async defer onload="window.__gsiLoaded=true; if(window.__onGsiReady) window.__onGsiReady();"></script>
 
 <style>
   :root{
@@ -412,6 +412,16 @@ function formatDate(iso) {
    GOOGLE PŘIHLÁŠENÍ (OAuth token pro zápis do Sheetu)
    ====================================================================== */
 function initAuth() {
+  // GSI skript se načítá async - pokud ještě není hotový, počkej na jeho onload
+  if (typeof google === 'undefined' || !google.accounts) {
+    window.__onGsiReady = initAuth;
+    document.getElementById('loginBtn').disabled = true;
+    document.getElementById('loginBtn').textContent = 'Načítám přihlášení…';
+    return;
+  }
+  document.getElementById('loginBtn').disabled = false;
+  document.getElementById('loginBtn').textContent = 'Přihlásit přes Google';
+ 
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: CONFIG.OAUTH_CLIENT_ID,
     scope: SCOPES,

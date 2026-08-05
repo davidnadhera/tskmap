@@ -196,7 +196,7 @@ function wktLineToLatLngs(wkt) {
 
 function loadCsv() {
   return new Promise((resolve, reject) => {
-    Papa.parse(CONFIG.CSV_URL, {
+    Papa.parse(`${CONFIG.CSV_URL}?v=${Date.now()}`, {
       download: true,
       delimiter: ';',
       complete: (result) => {
@@ -267,7 +267,7 @@ function styleForMetric() {
   const computed = features.map(f => ({ f, c: computeForFeature(f) }));
   const maxAbsWeight = Math.max(...computed.map(x => x.c.forWeight || 0), 1);
 
-  renderLegend(maxAbsWeight);
+  renderLegend();
 
   const byId = new Map(computed.map(x => [x.f.id, x.c]));
 
@@ -290,31 +290,26 @@ function styleForMetric() {
   };
 }
 
-function renderLegend(maxAbsWeight) {
+function renderLegend() {
   const el = document.getElementById('legend');
   el.innerHTML = '';
 
   if (currentMode === 'ss' || currentMode === 'vyhl') {
     el.insertAdjacentHTML('beforeend',
-      `<div class="legend-item"><span class="swatch" style="background:${COLOR_PURPLE}"></span>Typ úseku 10–20 nebo 40–59</div>`);
+      `<div class="legend-item"><span class="swatch" style="background:${COLOR_PURPLE}"></span>Nadřazená silniční síť</div>`);
     el.insertAdjacentHTML('beforeend',
-      `<div class="legend-item"><span class="swatch" style="background:${COLOR_GREEN}"></span>Ostatní typy úseku</div>`);
-    el.insertAdjacentHTML('beforeend',
-      `<div class="legend-item" style="color:var(--muted)">Tloušťka linie = intenzita</div>`);
+      `<div class="legend-item"><span class="swatch" style="background:${COLOR_GREEN}"></span>Ostatní silniční síť</div>`);
     return;
   }
 
   const rows = [
-    [DIFF_RAMP_POS, 'Nárůst (výhled > současnost)'],
-    [DIFF_RAMP_NEG, 'Pokles (výhled < současnost)'],
+    [DIFF_RAMP_POS, 'Nárůst'],
+    [DIFF_RAMP_NEG, 'Pokles'],
   ];
   rows.forEach(([color, label]) => {
     el.insertAdjacentHTML('beforeend',
       `<div class="legend-item"><span class="swatch" style="background:${color}"></span>${label}</div>`);
   });
-  const unit = currentMode === 'diff_pct' ? 'velikost změny v %' : 'velikost změny';
-  el.insertAdjacentHTML('beforeend',
-    `<div class="legend-item" style="color:var(--muted)">Tloušťka linie = ${unit}</div>`);
 }
 
 /* ======================================================================
@@ -432,13 +427,11 @@ function popupHtml(f) {
     </div>`;
 
   return `
-    <div class="popup-title">Úsek č. ${escapeHtml(f.id)}</div>
     <table class="attr-table">
       <tr><td class="k">Celkem – současný stav</td><td class="v">${fmt(p.total_ss)}</td></tr>
       <tr><td class="k">Celkem – výhled</td><td class="v">${fmt(p.total_vyhl)}</td></tr>
       <tr><td class="k">Nákladní – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
       <tr><td class="k">Nákladní – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
-      <tr><td class="k">Typ úseku</td><td class="v">${fmt(p.typ)}</td></tr>
     </table>
     <div class="notes-list">${notesHtml}</div>
     ${formHtml}

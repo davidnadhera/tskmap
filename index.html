@@ -533,10 +533,10 @@ function popupHtml(f) {
     <table class="attr-table">
       <tr><td class="k">Celkem – současný stav</td><td class="v">${fmt(p.total_ss)}</td></tr>
       <tr><td class="k">Celkem – výhled</td><td class="v">${fmt(p.total_vyhl)}</td></tr>
-      <tr><td class="k">Nákladní – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
-      <tr><td class="k">Nákladní – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
+      <tr><td class="k">z toho nad 3,5 t – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
+      <tr><td class="k">z toho nad 3,5 t – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
       <tr><td class="k">Změna – celkem</td><td class="v">${fmtChange(chg.total.diff, chg.total.pct, chg.total.isNew)}</td></tr>
-      <tr><td class="k">Změna – nákladní</td><td class="v">${fmtChange(chg.heavy.diff, chg.heavy.pct, chg.heavy.isNew)}</td></tr>
+      <tr><td class="k">Změna – pouze nad 3,5 t</td><td class="v">${fmtChange(chg.heavy.diff, chg.heavy.pct, chg.heavy.isNew)}</td></tr>
     </table>
     <div class="notes-list">${notesHtml}</div>
     ${formHtml}
@@ -589,8 +589,8 @@ async function submitNote(f) {
   const textarea = document.getElementById(`noteText_${f.id}`);
   const autor = authorInput.value.trim();
   const text = textarea.value.trim();
-  if (!text) { showToast('Napiš text poznámky.'); return; }
-  if (!autor) { showToast('Vyplň prosím jméno.'); return; }
+  if (!text) { showToast('Napište text poznámky.'); return; }
+  if (!autor) { showToast('Vyplňte prosím jméno.'); return; }
 
   localStorage.setItem('authorName', autor);
   document.getElementById('authorName').value = autor;
@@ -619,7 +619,7 @@ async function submitNote(f) {
     showToast('Poznámka uložena.');
   } catch (e) {
     console.error(e);
-    showToast('Uložení se nezdařilo. Zkontroluj nastavení Apps Scriptu.');
+    showToast('Uložení se nezdařilo. Zkontrolujte nastavení Apps Scriptu.');
     btn.disabled = false; btn.textContent = 'Přidat poznámku';
   }
 }

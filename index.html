@@ -171,6 +171,7 @@ const COLOR_PURPLE = '#8e44ad';
 const COLOR_GREEN = '#2e8b57';
 const DIFF_RAMP_NEG = '#2166ac';
 const DIFF_RAMP_POS = '#b2182b';
+const COLOR_NEW = '#f59e0b';
 
 const MIN_WEIGHT = 2;
 const MAX_WEIGHT = 9;
@@ -250,22 +251,73 @@ function computeForFeature(f) {
     return { value: null, forWeight: null, isNew: true };
   }
   const pct = ((vyhl - ss) / ss) * 100;
-  return { value: pct, forWeight: Math.abs(pct), isNew: false };
+  // Škálování tloušťky pro procenta je symetrické kolem poměru 1:1 -
+  // použije se log2 poměru vyhl/ss, takže nárůst na dvojnásobek (+100 %,
+  // poměr 2) vyjde tloušťkou stejně jako pokles na polovinu (-50 %,
+  // poměr 0,5), nárůst na trojnásobek (+200 %) stejně jako pokles o
+  // 66,7 % (poměr 1/3) atd.
+  const ratio = vyhl / ss;
+  const logRatio = Math.log2(ratio);
+  return { value: pct, forWeight: Math.abs(logRatio), isNew: false };
+}
+
+// Absolutní a relativní změna (celkem i nákladní) - nezávisí na zvoleném
+// režimu/vozidlech, používá se v popupu.
+function computeChanges(f) {
+  const p = f.props;
+  function one(ss, vyhl) {
+    const diff = vyhl - ss;
+    const isNew = ss === 0 && vyhl > 0;
+    const pct = ss !== 0 ? (diff / ss) * 100 : null;
+    return { diff, pct, isNew };
+  }
+  return {
+    total: one(p.total_ss, p.total_vyhl),
+    heavy: one(p.heavy_ss, p.heavy_vyhl),
+  };
 }
 
 function isPurpleType(typ) {
   return (typ >= 10 && typ <= 20) || (typ >= 40 && typ <= 59);
 }
 
-function weightForValue(absValue, maxAbs) {
-  if (absValue === null || isNaN(absValue)) return MAX_WEIGHT; // nový úsek - zvýraznit
-  const w = MIN_WEIGHT + (Math.abs(absValue) / (maxAbs || 1)) * (MAX_WEIGHT - MIN_WEIGHT);
-  return Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, w));
+// Škálování tloušťky podle percentilu hodnoty v rozložení všech úseků
+// (místo lineárního škálování vůči maximu). Tím se zohlední skutečné
+// rozložení hodnot - když jeden úsek má extrémní hodnotu, ostatní úseky
+// se navzájem dál odliší podle svého pořadí, místo aby všechny vyšly
+// prakticky stejně tence kvůli jedinému outlieru.
+function makeWeightScale(forWeightValues) {
+  const sorted = forWeightValues
+    .filter(v => v !== null && v !== undefined && !isNaN(v))
+    .sort((a, b) => a - b);
+  const n = sorted.length;
+
+  function lowerBound(v) {
+    let lo = 0, hi = n;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  function upperBound(v) {
+    let lo = 0, hi = n;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] <= v) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+
+  return function (absValue) {
+    if (absValue === null || absValue === undefined || isNaN(absValue)) return MAX_WEIGHT; // nový úsek - zvýraznit
+    if (n <= 1) return MAX_WEIGHT;
+    // percentil = průměr dolní a horní pozice hodnoty v seřazeném poli
+    // (řeší shodné hodnoty spravedlivě)
+    const rank = (lowerBound(absValue) + upperBound(absValue)) / 2;
+    const p = rank / (n - 1);
+    const w = MIN_WEIGHT + p * (MAX_WEIGHT - MIN_WEIGHT);
+    return Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, w));
+  };
 }
 
 function styleForMetric() {
   const computed = features.map(f => ({ f, c: computeForFeature(f) }));
-  const maxAbsWeight = Math.max(...computed.map(x => x.c.forWeight || 0), 1);
+  const weightScale = makeWeightScale(computed.map(x => x.c.forWeight));
 
   renderLegend();
 
@@ -276,14 +328,15 @@ function styleForMetric() {
     let color;
     if (currentMode === 'ss' || currentMode === 'vyhl') {
       color = isPurpleType(feature.props.typ) ? COLOR_PURPLE : COLOR_GREEN;
+    } else if (c.isNew) {
+      // nový úsek - odlišná barva místo řazení k nárůstu/poklesu
+      color = COLOR_NEW;
     } else {
-      // diff / diff_pct - nový úsek bereme jako nárůst (červená)
-      const v = c.isNew ? 1 : c.value;
-      color = v >= 0 ? DIFF_RAMP_POS : DIFF_RAMP_NEG;
+      color = c.value >= 0 ? DIFF_RAMP_POS : DIFF_RAMP_NEG;
     }
     return {
       color,
-      weight: weightForValue(c.forWeight, maxAbsWeight),
+      weight: weightScale(c.forWeight),
       opacity: 0.9,
       computed: c,
     };
@@ -305,6 +358,7 @@ function renderLegend() {
   const rows = [
     [DIFF_RAMP_POS, 'Nárůst'],
     [DIFF_RAMP_NEG, 'Pokles'],
+    [COLOR_NEW, 'Nový úsek'],
   ];
   rows.forEach(([color, label]) => {
     el.insertAdjacentHTML('beforeend',
@@ -446,14 +500,17 @@ function redraw() {
    ====================================================================== */
 function fmt(n) { return Math.round(n).toLocaleString('cs-CZ'); }
 
+function fmtChange(diff, pct, isNew) {
+  const sign = diff > 0 ? '+' : '';
+  const diffStr = `${sign}${fmt(diff)}`;
+  const pctStr = isNew ? 'nový úsek' : `${sign}${pct.toFixed(1).replace('.', ',')} %`;
+  return `${diffStr} (${pctStr})`;
+}
+
 function popupHtml(f) {
   const p = f.props;
-  const c = computeForFeature(f);
   const notes = notesByUsek.get(String(f.id)) || [];
-
-  const newBadge = (c.isNew && (currentMode === 'diff' || currentMode === 'diff_pct'))
-    ? `<div class="hint" style="margin-bottom:8px;">Nový úsek (v současném stavu nulová intenzita).</div>`
-    : '';
+  const chg = computeChanges(f);
 
   const notesHtml = notes.length
     ? notes.map(n => `
@@ -478,8 +535,9 @@ function popupHtml(f) {
       <tr><td class="k">Celkem – výhled</td><td class="v">${fmt(p.total_vyhl)}</td></tr>
       <tr><td class="k">Nákladní – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
       <tr><td class="k">Nákladní – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
+      <tr><td class="k">Změna – celkem</td><td class="v">${fmtChange(chg.total.diff, chg.total.pct, chg.total.isNew)}</td></tr>
+      <tr><td class="k">Změna – nákladní</td><td class="v">${fmtChange(chg.heavy.diff, chg.heavy.pct, chg.heavy.isNew)}</td></tr>
     </table>
-    ${newBadge}
     <div class="notes-list">${notesHtml}</div>
     ${formHtml}
   `;

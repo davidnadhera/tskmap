@@ -71,6 +71,12 @@
   .note-form textarea{ resize:vertical; min-height:50px; }
   .note-form .hint{ font-size:11px; color:var(--muted); margin-bottom:6px; }
 
+  .usek-label{
+    background:rgba(255,255,255,.92); border:1px solid var(--border); border-radius:4px;
+    padding:1px 5px; font-size:11px; font-weight:600; color:var(--text); box-shadow:none;
+  }
+  .usek-label::before{ display:none; }
+
   #toast{
     position:absolute; bottom:16px; left:356px; z-index:2000;
     background:#111827; color:#fff; padding:8px 14px; border-radius:6px; font-size:12px;
@@ -89,15 +95,24 @@
   </div>
 
   <div class="sb-section">
-    <h2>Zobrazovaná veličina</h2>
-    <select id="metricSelect">
-      <option value="total_ss">Celková intenzita – současný stav</option>
-      <option value="total_vyhl">Celková intenzita – výhledový stav</option>
-      <option value="heavy_ss">Nákladní vozidla (&gt;3,5 t) – současný stav</option>
-      <option value="heavy_vyhl">Nákladní vozidla (&gt;3,5 t) – výhledový stav</option>
-      <option value="total_diff">Rozdíl celkové intenzity (výhled − současnost)</option>
-      <option value="heavy_diff">Rozdíl nákladních vozidel (výhled − současnost)</option>
+    <h2>Režim zobrazení</h2>
+    <select id="modeSelect">
+      <option value="ss">Intenzity – současný stav</option>
+      <option value="vyhl">Intenzity – výhledový stav</option>
+      <option value="diff">Rozdíl (výhled − současnost)</option>
+      <option value="diff_pct">Rozdíl v procentech</option>
     </select>
+
+    <h2 style="margin-top:12px;">Vozidla</h2>
+    <select id="vehicleSelect">
+      <option value="total">Všechna vozidla</option>
+      <option value="heavy">Jen nad 3,5 t</option>
+    </select>
+
+    <label class="row">
+      <input type="checkbox" id="labelsToggle" checked>
+      Zobrazit popisky s hodnotami
+    </label>
 
     <label class="row">
       <input type="checkbox" id="notesFilter">
@@ -149,11 +164,16 @@ const CONFIG = {
 let map, geoLayer;
 let features = [];              // pole {id, props:{...}, latlngs:[...]}
 let notesByUsek = new Map();    // UsekId -> [ {autor, text, cas} ]
-let currentMetric = 'total_ss';
+let currentMode = 'ss';         // ss | vyhl | diff | diff_pct
+let currentVehicle = 'total';   // total | heavy
 
-const RAMP = ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026'];
+const COLOR_PURPLE = '#8e44ad';
+const COLOR_GREEN = '#2e8b57';
 const DIFF_RAMP_NEG = '#2166ac';
 const DIFF_RAMP_POS = '#b2182b';
+
+const MIN_WEIGHT = 2;
+const MAX_WEIGHT = 9;
 
 /* ======================================================================
    NAČTENÍ A PARSOVÁNÍ CSV
@@ -183,7 +203,7 @@ function loadCsv() {
         try {
           // první řádek je hlavička (i když neobvykle pojmenovaná) -> přeskočit
           const parsed = result.data.slice(1)
-            .filter(r => r.length >= 7 && r[6] && r[6].trim().length > 0)
+            .filter(r => r.length >= 8 && r[7] && r[7].trim().length > 0)
             .map(r => {
               const props = {
                 id: r[1].trim(),                 // sloupec "No" v hlavičce = skutečné ID úseku
@@ -191,10 +211,9 @@ function loadCsv() {
                 total_vyhl: parseNumber(r[3]),
                 heavy_ss: parseNumber(r[4]),
                 heavy_vyhl: parseNumber(r[5]),
+                typ: parseNumber(r[6]),          // TypUseku - určuje barvu v režimech "Intenzity"
               };
-              props.total_diff = props.total_vyhl - props.total_ss;
-              props.heavy_diff = props.heavy_vyhl - props.heavy_ss;
-              return { id: props.id, props, latlngs: wktLineToLatLngs(r[6]) };
+              return { id: props.id, props, latlngs: wktLineToLatLngs(r[7]) };
             });
           resolve(parsed);
         } catch (e) { reject(e); }
@@ -205,74 +224,97 @@ function loadCsv() {
 }
 
 /* ======================================================================
-   KLASIFIKACE A BARVY
+   VÝPOČET HODNOT PRO AKTUÁLNÍ REŽIM
    ====================================================================== */
-function computeBreaks(values, classes = 5) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const breaks = [];
-  for (let i = 1; i < classes; i++) {
-    const idx = Math.floor((sorted.length - 1) * (i / classes));
-    breaks.push(sorted[idx]);
+// vrací { value, isNew, colorValue } kde:
+// - value = hodnota k zobrazení v popisku (intenzita / rozdíl / rozdíl v %)
+// - isNew = úsek měl v současném stavu nulovou intenzitu (nový úsek)
+// - forWeight = hodnota použitá pro škálování tloušťky (vždy >= 0)
+function computeForFeature(f) {
+  const ss = f.props[currentVehicle + '_ss'];
+  const vyhl = f.props[currentVehicle + '_vyhl'];
+  const isNew = ss === 0 && vyhl > 0;
+
+  if (currentMode === 'ss') {
+    return { value: ss, forWeight: ss, isNew: false };
   }
-  return breaks; // 4 breakpointy => 5 tříd
+  if (currentMode === 'vyhl') {
+    return { value: vyhl, forWeight: vyhl, isNew: false };
+  }
+  if (currentMode === 'diff') {
+    const diff = vyhl - ss;
+    return { value: diff, forWeight: Math.abs(diff), isNew };
+  }
+  // diff_pct
+  if (ss === 0) {
+    return { value: null, forWeight: null, isNew: true };
+  }
+  const pct = ((vyhl - ss) / ss) * 100;
+  return { value: pct, forWeight: Math.abs(pct), isNew: false };
 }
 
-function colorForValue(value, breaks, isDiff) {
-  if (isDiff) {
-    return value >= 0 ? DIFF_RAMP_POS : DIFF_RAMP_NEG;
-  }
-  let cls = 0;
-  while (cls < breaks.length && value > breaks[cls]) cls++;
-  return RAMP[cls];
+function isPurpleType(typ) {
+  return (typ >= 10 && typ <= 20) || (typ >= 40 && typ <= 59);
 }
 
-function weightForValue(value, maxAbsAllValues) {
-  const w = 2 + (Math.abs(value) / (maxAbsAllValues || 1)) * 7;
-  return Math.max(2, Math.min(9, w));
+function weightForValue(absValue, maxAbs) {
+  if (absValue === null || isNaN(absValue)) return MAX_WEIGHT; // nový úsek - zvýraznit
+  const w = MIN_WEIGHT + (Math.abs(absValue) / (maxAbs || 1)) * (MAX_WEIGHT - MIN_WEIGHT);
+  return Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, w));
 }
 
 function styleForMetric() {
-  const isDiff = currentMetric.endsWith('_diff');
-  const values = features.map(f => f.props[currentMetric]);
-  const breaks = isDiff ? [] : computeBreaks(values);
-  const maxAbs = Math.max(...values.map(Math.abs), 1);
+  const computed = features.map(f => ({ f, c: computeForFeature(f) }));
+  const maxAbsWeight = Math.max(...computed.map(x => x.c.forWeight || 0), 1);
 
-  renderLegend(isDiff, breaks, maxAbs, values);
+  renderLegend(maxAbsWeight);
+
+  const byId = new Map(computed.map(x => [x.f.id, x.c]));
 
   return function (feature) {
-    const v = feature.props[currentMetric];
+    const c = byId.get(feature.id);
+    let color;
+    if (currentMode === 'ss' || currentMode === 'vyhl') {
+      color = isPurpleType(feature.props.typ) ? COLOR_PURPLE : COLOR_GREEN;
+    } else {
+      // diff / diff_pct - nový úsek bereme jako nárůst (červená)
+      const v = c.isNew ? 1 : c.value;
+      color = v >= 0 ? DIFF_RAMP_POS : DIFF_RAMP_NEG;
+    }
     return {
-      color: colorForValue(v, breaks, isDiff),
-      weight: weightForValue(v, maxAbs),
+      color,
+      weight: weightForValue(c.forWeight, maxAbsWeight),
       opacity: 0.9,
+      computed: c,
     };
   };
 }
 
-function renderLegend(isDiff, breaks, maxAbs, values) {
+function renderLegend(maxAbsWeight) {
   const el = document.getElementById('legend');
   el.innerHTML = '';
-  if (isDiff) {
-    const rows = [
-      [DIFF_RAMP_POS, 'Nárůst (výhled > současnost)'],
-      [DIFF_RAMP_NEG, 'Pokles (výhled < současnost)'],
-    ];
-    rows.forEach(([color, label]) => {
-      el.insertAdjacentHTML('beforeend',
-        `<div class="legend-item"><span class="swatch" style="background:${color}"></span>${label}</div>`);
-    });
+
+  if (currentMode === 'ss' || currentMode === 'vyhl') {
     el.insertAdjacentHTML('beforeend',
-      `<div class="legend-item" style="color:var(--muted)">Tloušťka linie = velikost změny</div>`);
+      `<div class="legend-item"><span class="swatch" style="background:${COLOR_PURPLE}"></span>Typ úseku 10–20 nebo 40–59</div>`);
+    el.insertAdjacentHTML('beforeend',
+      `<div class="legend-item"><span class="swatch" style="background:${COLOR_GREEN}"></span>Ostatní typy úseku</div>`);
+    el.insertAdjacentHTML('beforeend',
+      `<div class="legend-item" style="color:var(--muted)">Tloušťka linie = intenzita</div>`);
     return;
   }
-  const min = Math.min(...values);
-  const edges = [min, ...breaks, Math.max(...values)];
-  for (let i = 0; i < RAMP.length; i++) {
-    const from = Math.round(edges[i]);
-    const to = Math.round(edges[i + 1]);
+
+  const rows = [
+    [DIFF_RAMP_POS, 'Nárůst (výhled > současnost)'],
+    [DIFF_RAMP_NEG, 'Pokles (výhled < současnost)'],
+  ];
+  rows.forEach(([color, label]) => {
     el.insertAdjacentHTML('beforeend',
-      `<div class="legend-item"><span class="swatch" style="background:${RAMP[i]}"></span>${from.toLocaleString('cs-CZ')} – ${to.toLocaleString('cs-CZ')}</div>`);
-  }
+      `<div class="legend-item"><span class="swatch" style="background:${color}"></span>${label}</div>`);
+  });
+  const unit = currentMode === 'diff_pct' ? 'velikost změny v %' : 'velikost změny';
+  el.insertAdjacentHTML('beforeend',
+    `<div class="legend-item" style="color:var(--muted)">Tloušťka linie = ${unit}</div>`);
 }
 
 /* ======================================================================
@@ -292,9 +334,45 @@ function passesNotesFilter(f) {
   return notes.length > 0;
 }
 
+function midpoint(latlngs) {
+  // střední bod podle délky linie (ne jen prostřední vrchol), ať popisek
+  // sedí i u dlouhých/nerovnoměrně vedených úseků
+  let total = 0;
+  const segLens = [];
+  for (let i = 0; i < latlngs.length - 1; i++) {
+    const d = map.distance(latlngs[i], latlngs[i + 1]);
+    segLens.push(d);
+    total += d;
+  }
+  let acc = 0;
+  const half = total / 2;
+  for (let i = 0; i < segLens.length; i++) {
+    if (acc + segLens[i] >= half) {
+      const t = (half - acc) / (segLens[i] || 1);
+      const [lat1, lng1] = latlngs[i];
+      const [lat2, lng2] = latlngs[i + 1];
+      return [lat1 + (lat2 - lat1) * t, lng1 + (lng2 - lng1) * t];
+    }
+    acc += segLens[i];
+  }
+  return latlngs[Math.floor(latlngs.length / 2)];
+}
+
+function labelText(c) {
+  if (c.isNew) return 'Nový úsek';
+  if (c.value === null || isNaN(c.value)) return '';
+  if (currentMode === 'diff_pct') {
+    const sign = c.value > 0 ? '+' : '';
+    return `${sign}${c.value.toFixed(1).replace('.', ',')} %`;
+  }
+  const sign = (currentMode === 'diff' && c.value > 0) ? '+' : '';
+  return `${sign}${fmt(c.value)}`;
+}
+
 function redraw() {
   const styleFn = styleForMetric();
   if (geoLayer) map.removeLayer(geoLayer);
+  const showLabels = document.getElementById('labelsToggle').checked;
 
   const group = L.layerGroup();
   features.forEach(f => {
@@ -308,6 +386,21 @@ function redraw() {
     const line = L.polyline(f.latlngs, style);
     line.on('click', () => openPopup(line, f));
     line.addTo(group);
+
+    if (showLabels) {
+      const text = labelText(style.computed);
+      if (text) {
+        L.tooltip({
+          permanent: true,
+          direction: 'center',
+          className: 'usek-label',
+          opacity: 0.95,
+        })
+          .setLatLng(midpoint(f.latlngs))
+          .setContent(text)
+          .addTo(group);
+      }
+    }
   });
   geoLayer = group.addTo(map);
 }
@@ -345,6 +438,7 @@ function popupHtml(f) {
       <tr><td class="k">Celkem – výhled</td><td class="v">${fmt(p.total_vyhl)}</td></tr>
       <tr><td class="k">Nákladní – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
       <tr><td class="k">Nákladní – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
+      <tr><td class="k">Typ úseku</td><td class="v">${fmt(p.typ)}</td></tr>
     </table>
     <div class="notes-list">${notesHtml}</div>
     ${formHtml}
@@ -454,10 +548,15 @@ async function main() {
   authorNameInput.value = localStorage.getItem('authorName') || '';
   authorNameInput.onchange = () => localStorage.setItem('authorName', authorNameInput.value.trim());
 
-  document.getElementById('metricSelect').onchange = (e) => {
-    currentMetric = e.target.value;
+  document.getElementById('modeSelect').onchange = (e) => {
+    currentMode = e.target.value;
     redraw();
   };
+  document.getElementById('vehicleSelect').onchange = (e) => {
+    currentVehicle = e.target.value;
+    redraw();
+  };
+  document.getElementById('labelsToggle').onchange = redraw;
   document.getElementById('notesFilter').onchange = redraw;
 
   try {

@@ -8,7 +8,6 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async defer onload="window.__gsiLoaded=true; if(window.__onGsiReady) window.__onGsiReady();"></script>
 
 <style>
   :root{
@@ -49,10 +48,8 @@
   .legend-item{ display:flex; align-items:center; gap:8px; margin:4px 0; }
   .swatch{ width:16px; height:10px; border-radius:2px; flex:none; }
 
-  #authBox{ font-size:12px; }
-  #userInfo{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-  #userInfo img{ width:24px; height:24px; border-radius:50%; }
-  #userInfo .email{ font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .field{ margin-bottom:8px; }
+  .field label{ display:block; font-size:12px; color:var(--muted); margin-bottom:3px; }
 
   #status{ font-size:12px; color:var(--muted); padding:0 16px 14px; }
 
@@ -70,7 +67,8 @@
   .note-item .meta{ color:var(--muted); font-size:11px; margin-bottom:2px; }
   .note-empty{ color:var(--muted); font-size:12px; margin-bottom:8px; }
 
-  .note-form textarea{ resize:vertical; min-height:50px; margin-bottom:6px; }
+  .note-form input, .note-form textarea{ margin-bottom:6px; }
+  .note-form textarea{ resize:vertical; min-height:50px; }
   .note-form .hint{ font-size:11px; color:var(--muted); margin-bottom:6px; }
 
   #toast{
@@ -113,15 +111,11 @@
   </div>
 
   <div class="sb-section">
-    <h2>Přihlášení (pro přidání poznámky)</h2>
-    <div id="authBox">
-      <div id="userInfo" style="display:none;">
-        <img id="userAvatar" src="" alt="">
-        <span class="email" id="userEmail"></span>
-      </div>
-      <button id="loginBtn" class="secondary">Přihlásit přes Google</button>
-      <button id="logoutBtn" class="secondary" style="display:none; margin-top:6px;">Odhlásit</button>
+    <h2>Vaše jméno</h2>
+    <div class="field">
+      <input type="text" id="authorName" placeholder="Jméno (zobrazí se u vašich poznámek)">
     </div>
+    <p class="sub" style="margin-top:6px;">Jméno se uloží jen v tomto prohlížeči a předvyplní se u nových poznámek.</p>
   </div>
 
   <div style="flex:1"></div>
@@ -139,46 +133,23 @@ const CONFIG = {
   // Cesta k CSV souboru s úseky (relativně k index.html)
   CSV_URL: 'data.csv',
 
-  // Google Sheet, kam se ukládají poznámky.
-  // List (tab) musí mít hlavičku: UsekId | Autor | Email | Text | Cas
-  SHEET_ID: '1DxeNvOAy-aGilF9Xm9MWsMt-rm9Bq7Pb8z44J8maPDg',
-  SHEET_RANGE: 'TSKmap!A2:E',       // rozsah pro čtení/append (bez hlavičky)
-  SHEET_TAB: 'TSKmap',
-
-  // Google Cloud OAuth Client ID (Web application)
-  // Authorized JavaScript origins musí obsahovat URL, na které appka běží
-  OAUTH_CLIENT_ID: '63606264490-avik2fg5j16dp3i01idoovb0k0fganv6.apps.googleusercontent.com',
-
-  // API klíč (pro anonymní čtení Sheetu bez přihlášení) — Sheet musí mít
-  // sdílení "Kdokoli s odkazem – Prohlížející". Pokud chceš, aby i čtení
-  // poznámek vyžadovalo přihlášení, nastav na null a čtení poběží přes OAuth token.
-  API_KEY: 'AIzaSyBTgAlWihftQ8zKW47bozDV4UQEbYl6Z_4',
+  // URL nasazeného Google Apps Script Web Appu (viz README / Code.gs).
+  // Appka přes ni čte i zapisuje poznámky - Sheet samotný zůstává
+  // soukromý, přístup k němu má jen tvůj Google účet, pod kterým je
+  // skript nasazený.
+  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbzDhFA4JkzN71s0HgWbqbMO3B4REHu3-td4mLHk0Y0IbQixH5G3PnfJ9LucWWwpnYiEfQ/exec',
 
   MAP_CENTER: [50.045, 14.47],
   MAP_ZOOM: 12,
 };
-
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
 /* ======================================================================
    STAV APLIKACE
    ====================================================================== */
 let map, geoLayer;
 let features = [];              // pole {id, props:{...}, latlngs:[...]}
-let notesByUsek = new Map();    // UsekId -> [ {autor, email, text, cas} ]
-let accessToken = null;
-let currentUser = null;         // {email, name, picture}
-let tokenClient = null;
+let notesByUsek = new Map();    // UsekId -> [ {autor, text, cas} ]
 let currentMetric = 'total_ss';
-
-const METRIC_LABELS = {
-  total_ss:   'Celková intenzita (voz./24h) – současný stav',
-  total_vyhl: 'Celková intenzita (voz./24h) – výhledový stav',
-  heavy_ss:   'Nákladní vozidla >3,5t (voz./24h) – současný stav',
-  heavy_vyhl: 'Nákladní vozidla >3,5t (voz./24h) – výhledový stav',
-  total_diff: 'Rozdíl celkové intenzity (výhled − současnost)',
-  heavy_diff: 'Rozdíl nákladních vozidel (výhled − současnost)',
-};
 
 const RAMP = ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026'];
 const DIFF_RAMP_NEG = '#2166ac';
@@ -248,10 +219,7 @@ function computeBreaks(values, classes = 5) {
 
 function colorForValue(value, breaks, isDiff) {
   if (isDiff) {
-    const maxAbs = Math.max(...breaks.map(Math.abs), Math.abs(value), 1);
-    const t = Math.min(Math.abs(value) / maxAbs, 1);
-    const base = value >= 0 ? DIFF_RAMP_POS : DIFF_RAMP_NEG;
-    return base; // barva dle znaménka, tloušťka dle velikosti (řešeno ve weightForValue)
+    return value >= 0 ? DIFF_RAMP_POS : DIFF_RAMP_NEG;
   }
   let cls = 0;
   while (cls < breaks.length && value > breaks[cls]) cls++;
@@ -333,14 +301,11 @@ function redraw() {
     if (!passesNotesFilter(f)) return;
     const style = styleFn(f);
     const hasNotes = (notesByUsek.get(String(f.id)) || []).length > 0;
-    const line = L.polyline(f.latlngs, {
-      ...style,
-      dashArray: hasNotes ? null : null,
-    });
     if (hasNotes) {
-      // vizuální odlišení úseků s poznámkou: tečkovaný obrys navrch
+      // vizuální odlišení úseků s poznámkou: jemný obrys navrch
       L.polyline(f.latlngs, { color: '#111827', weight: style.weight + 3, opacity: 0.15 }).addTo(group);
     }
+    const line = L.polyline(f.latlngs, style);
     line.on('click', () => openPopup(line, f));
     line.addTo(group);
   });
@@ -359,19 +324,19 @@ function popupHtml(f) {
   const notesHtml = notes.length
     ? notes.map(n => `
         <div class="note-item">
-          <div class="meta">${escapeHtml(n.autor || n.email || 'Anonym')} · ${formatDate(n.cas)}</div>
+          <div class="meta">${escapeHtml(n.autor || 'Anonym')} · ${formatDate(n.cas)}</div>
           <div>${escapeHtml(n.text)}</div>
         </div>`).join('')
     : `<div class="note-empty">Zatím žádné poznámky.</div>`;
 
-  const formHtml = currentUser
-    ? `
-      <div class="note-form">
-        <textarea id="noteText_${f.id}" placeholder="Napište poznámku k úseku…"></textarea>
-        <div class="hint">Přidáte jako ${escapeHtml(currentUser.email)}</div>
-        <button id="noteSubmit_${f.id}">Přidat poznámku</button>
-      </div>`
-    : `<div class="hint">Pro přidání poznámky se prosím přihlaste vlevo přes Google.</div>`;
+  const savedName = localStorage.getItem('authorName') || '';
+
+  const formHtml = `
+    <div class="note-form">
+      <input type="text" id="noteAuthor_${f.id}" placeholder="Jméno" value="${escapeHtml(savedName)}">
+      <textarea id="noteText_${f.id}" placeholder="Napište poznámku k úseku…"></textarea>
+      <button id="noteSubmit_${f.id}">Přidat poznámku</button>
+    </div>`;
 
   return `
     <div class="popup-title">Úsek č. ${escapeHtml(f.id)}</div>
@@ -392,10 +357,8 @@ function openPopup(layer, f) {
     .setContent(popupHtml(f))
     .openOn(map);
 
-  if (currentUser) {
-    const btn = document.getElementById(`noteSubmit_${f.id}`);
-    if (btn) btn.onclick = () => submitNote(f, popup);
-  }
+  const btn = document.getElementById(`noteSubmit_${f.id}`);
+  if (btn) btn.onclick = () => submitNote(f);
 }
 
 function escapeHtml(s) {
@@ -409,126 +372,54 @@ function formatDate(iso) {
 }
 
 /* ======================================================================
-   GOOGLE PŘIHLÁŠENÍ (OAuth token pro zápis do Sheetu)
-   ====================================================================== */
-function initAuth() {
-  // GSI skript se načítá async - pokud ještě není hotový, počkej na jeho onload
-  if (typeof google === 'undefined' || !google.accounts) {
-    window.__onGsiReady = initAuth;
-    document.getElementById('loginBtn').disabled = true;
-    document.getElementById('loginBtn').textContent = 'Načítám přihlášení…';
-    return;
-  }
-  document.getElementById('loginBtn').disabled = false;
-  document.getElementById('loginBtn').textContent = 'Přihlásit přes Google';
- 
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: CONFIG.OAUTH_CLIENT_ID,
-    scope: SCOPES,
-    callback: async (resp) => {
-      if (resp.error) { showToast('Přihlášení selhalo.'); return; }
-      accessToken = resp.access_token;
-      await fetchUserInfo();
-      updateAuthUi();
-      // pokud nemáme API_KEY pro anonymní čtení, načteme poznámky až po přihlášení
-      if (!CONFIG.API_KEY) await loadNotes();
-      redraw();
-    },
-  });
-
-  document.getElementById('loginBtn').onclick = () => tokenClient.requestAccessToken();
-  document.getElementById('logoutBtn').onclick = () => {
-    if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
-    accessToken = null;
-    currentUser = null;
-    updateAuthUi();
-  };
-}
-
-async function fetchUserInfo() {
-  const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!res.ok) return;
-  const data = await res.json();
-  currentUser = { email: data.email, name: data.name, picture: data.picture };
-}
-
-function updateAuthUi() {
-  const userInfo = document.getElementById('userInfo');
-  const loginBtn = document.getElementById('loginBtn');
-  const logoutBtn = document.getElementById('logoutBtn');
-  if (currentUser) {
-    userInfo.style.display = 'flex';
-    document.getElementById('userAvatar').src = currentUser.picture || '';
-    document.getElementById('userEmail').textContent = currentUser.email;
-    loginBtn.style.display = 'none';
-    logoutBtn.style.display = 'block';
-  } else {
-    userInfo.style.display = 'none';
-    loginBtn.style.display = 'block';
-    logoutBtn.style.display = 'none';
-  }
-}
-
-/* ======================================================================
-   GOOGLE SHEETS — ČTENÍ A ZÁPIS POZNÁMEK
+   POZNÁMKY — čtení a zápis přes Google Apps Script Web App
+   (appka nikoho nepřihlašuje, Sheet zůstává soukromý pod tvým účtem)
    ====================================================================== */
 async function loadNotes() {
   try {
-    let url, headers = {};
-    if (accessToken) {
-      url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(CONFIG.SHEET_RANGE)}`;
-      headers = { Authorization: `Bearer ${accessToken}` };
-    } else if (CONFIG.API_KEY) {
-      url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(CONFIG.SHEET_RANGE)}?key=${CONFIG.API_KEY}`;
-    } else {
-      return; // čtení bez přihlášení není nastavené
-    }
-    const res = await fetch(url, { headers });
+    const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=list`);
     if (!res.ok) { console.warn('Nepodařilo se načíst poznámky', await res.text()); return; }
-    const data = await res.json();
-    const rows = data.values || [];
+    const list = await res.json();
     notesByUsek = new Map();
-    rows.forEach(([usekId, autor, email, text, cas]) => {
-      if (!usekId) return;
-      const list = notesByUsek.get(String(usekId)) || [];
-      list.push({ autor, email, text, cas });
-      notesByUsek.set(String(usekId), list);
+    list.forEach(n => {
+      if (!n.usekId) return;
+      const arr = notesByUsek.get(String(n.usekId)) || [];
+      arr.push({ autor: n.autor, text: n.text, cas: n.cas });
+      notesByUsek.set(String(n.usekId), arr);
     });
   } catch (e) {
     console.error(e);
   }
 }
 
-async function submitNote(f, popup) {
+async function submitNote(f) {
+  const authorInput = document.getElementById(`noteAuthor_${f.id}`);
   const textarea = document.getElementById(`noteText_${f.id}`);
+  const autor = authorInput.value.trim();
   const text = textarea.value.trim();
-  if (!text) return;
-  if (!accessToken) { showToast('Nejprve se přihlaste.'); return; }
+  if (!text) { showToast('Napiš text poznámky.'); return; }
+  if (!autor) { showToast('Vyplň prosím jméno.'); return; }
+
+  localStorage.setItem('authorName', autor);
+  document.getElementById('authorName').value = autor;
 
   const btn = document.getElementById(`noteSubmit_${f.id}`);
   btn.disabled = true; btn.textContent = 'Ukládám…';
 
-  const row = [[String(f.id), currentUser.name || '', currentUser.email, text, new Date().toISOString()]];
-
   try {
-    const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${encodeURIComponent(CONFIG.SHEET_TAB + '!A:E')}:append?valueInputOption=USER_ENTERED`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ values: row }),
-      }
-    );
-    if (!res.ok) throw new Error(await res.text());
+    // Content-Type: text/plain schválně, ať Apps Script Web App nevyžaduje
+    // CORS preflight (ten Apps Script endpointy nezvládají).
+    const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ usekId: String(f.id), autor, text }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok || result.ok === false) throw new Error(result.error || 'Uložení selhalo');
 
     // okamžitě zobraz i lokálně, bez čekání na reload
     const list = notesByUsek.get(String(f.id)) || [];
-    list.push({ autor: currentUser.name, email: currentUser.email, text, cas: new Date().toISOString() });
+    list.push({ autor, text, cas: new Date().toISOString() });
     notesByUsek.set(String(f.id), list);
 
     redraw();
@@ -536,7 +427,7 @@ async function submitNote(f, popup) {
     showToast('Poznámka uložena.');
   } catch (e) {
     console.error(e);
-    showToast('Uložení se nezdařilo. Zkontroluj přístup k Sheetu.');
+    showToast('Uložení se nezdařilo. Zkontroluj nastavení Apps Scriptu.');
     btn.disabled = false; btn.textContent = 'Přidat poznámku';
   }
 }
@@ -558,7 +449,10 @@ function showToast(msg) {
    ====================================================================== */
 async function main() {
   initMap();
-  initAuth();
+
+  const authorNameInput = document.getElementById('authorName');
+  authorNameInput.value = localStorage.getItem('authorName') || '';
+  authorNameInput.onchange = () => localStorage.setItem('authorName', authorNameInput.value.trim());
 
   document.getElementById('metricSelect').onchange = (e) => {
     currentMetric = e.target.value;
@@ -575,9 +469,7 @@ async function main() {
     return;
   }
 
-  if (CONFIG.API_KEY && CONFIG.API_KEY !== 'SEM_DEJ_API_KEY_NEBO_NULL') {
-    await loadNotes();
-  }
+  await loadNotes();
 
   redraw();
   if (features.length) {

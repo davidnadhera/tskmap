@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Přehled poznámek — Intenzity dopravy</title>
+<style>
+  :root{
+    --accent:#2563eb; --accent-dark:#1d4ed8; --text:#1f2937; --muted:#6b7280;
+    --border:#e5e7eb; --panel-bg:#fbfbfc;
+  }
+  *{ box-sizing:border-box; }
+  html, body{ margin:0; padding:0; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color:var(--text); background:var(--panel-bg); }
+
+  .topbar{
+    position:sticky; top:0; z-index:10; background:#fff; border-bottom:1px solid var(--border);
+    padding:14px 20px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  }
+  .topbar h1{ font-size:16px; margin:0; }
+  .topbar .sub{ font-size:12px; color:var(--muted); margin:2px 0 0; }
+  .topbar-actions{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  a.back-link{
+    text-decoration:none; font-size:13px; font-weight:600; color:var(--text);
+    background:#fff; border:1px solid var(--border); border-radius:6px; padding:7px 11px;
+  }
+  a.back-link:hover{ background:#f3f4f6; }
+
+  input[type=text]{
+    font-family:inherit; font-size:13px; border:1px solid var(--border); border-radius:6px;
+    padding:7px 10px; background:#fff; color:var(--text); width:220px;
+  }
+  select{
+    font-family:inherit; font-size:13px; border:1px solid var(--border); border-radius:6px;
+    padding:7px 10px; background:#fff; color:var(--text);
+  }
+
+  .container{ max-width:900px; margin:0 auto; padding:20px; }
+
+  #status{ font-size:13px; color:var(--muted); padding:20px 0; }
+
+  .note-card{
+    background:#fff; border:1px solid var(--border); border-radius:10px;
+    padding:14px 16px; margin-bottom:12px;
+  }
+  .note-head{
+    display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:6px; flex-wrap:wrap;
+  }
+  .note-author{ font-weight:700; font-size:14px; }
+  .note-time{ font-size:12px; color:var(--muted); white-space:nowrap; }
+  .note-text{ font-size:14px; line-height:1.5; white-space:pre-wrap; margin:0 0 10px; }
+  .note-foot{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .note-usek{ font-size:12px; color:var(--muted); }
+  a.map-link{
+    text-decoration:none; font-size:12px; font-weight:600; color:#fff; background:var(--accent);
+    border-radius:6px; padding:6px 10px;
+  }
+  a.map-link:hover{ background:var(--accent-dark); }
+
+  .empty{ color:var(--muted); font-size:14px; padding:30px 0; text-align:center; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <h1>Přehled poznámek</h1>
+    <p class="sub" id="countInfo">Načítám…</p>
+  </div>
+  <div class="topbar-actions">
+    <input type="text" id="searchBox" placeholder="Hledat v textu nebo jméně…">
+    <select id="sortSelect">
+      <option value="time_desc">Nejnovější první</option>
+      <option value="time_asc">Nejstarší první</option>
+      <option value="author">Podle autora</option>
+      <option value="usek">Podle úseku</option>
+    </select>
+    <a href="index.html" class="back-link">← Zpět na mapu</a>
+  </div>
+</div>
+
+<div class="container">
+  <div id="status">Načítám poznámky…</div>
+  <div id="list"></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+/* Konfigurace (CONFIG) je definovaná v config.js, sdíleném s index.html */
+
+let allNotes = []; // { usekId, autor, text, cas }
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  return d.toLocaleDateString('cs-CZ') + ' ' + d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadNotes() {
+  const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=list`);
+  if (!res.ok) throw new Error(await res.text());
+  const list = await res.json();
+  return list
+    .filter(n => n.usekId)
+    .map(n => ({ usekId: String(n.usekId), autor: n.autor || '', text: n.text || '', cas: n.cas || '' }));
+}
+
+function applyFilterAndSort() {
+  const q = document.getElementById('searchBox').value.trim().toLowerCase();
+  const sortBy = document.getElementById('sortSelect').value;
+
+  let rows = allNotes;
+  if (q) {
+    rows = rows.filter(n =>
+      n.text.toLowerCase().includes(q) ||
+      n.autor.toLowerCase().includes(q) ||
+      n.usekId.toLowerCase().includes(q)
+    );
+  }
+
+  rows = [...rows];
+  if (sortBy === 'time_desc') {
+    rows.sort((a, b) => new Date(b.cas) - new Date(a.cas));
+  } else if (sortBy === 'time_asc') {
+    rows.sort((a, b) => new Date(a.cas) - new Date(b.cas));
+  } else if (sortBy === 'author') {
+    rows.sort((a, b) => a.autor.localeCompare(b.autor, 'cs') || new Date(b.cas) - new Date(a.cas));
+  } else if (sortBy === 'usek') {
+    rows.sort((a, b) => a.usekId.localeCompare(b.usekId, 'cs', { numeric: true }) || new Date(b.cas) - new Date(a.cas));
+  }
+
+  render(rows);
+}
+
+function render(rows) {
+  const listEl = document.getElementById('list');
+  document.getElementById('countInfo').textContent =
+    `${rows.length} z ${allNotes.length} poznámek`;
+
+  if (!rows.length) {
+    listEl.innerHTML = `<div class="empty">Žádné poznámky neodpovídají filtru.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = rows.map(n => `
+    <div class="note-card">
+      <div class="note-head">
+        <span class="note-author">${escapeHtml(n.autor || 'Neznámý autor')}</span>
+        <span class="note-time">${escapeHtml(fmtDate(n.cas))}</span>
+      </div>
+      <p class="note-text">${escapeHtml(n.text)}</p>
+      <div class="note-foot">
+        <span class="note-usek">Úsek č. ${escapeHtml(n.usekId)}</span>
+        <a class="map-link" href="index.html?usek=${encodeURIComponent(n.usekId)}">Zobrazit na mapě →</a>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function main() {
+  try {
+    allNotes = await loadNotes();
+    document.getElementById('status').style.display = 'none';
+    applyFilterAndSort();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('status').textContent = 'Nepodařilo se načíst poznámky.';
+  }
+
+  document.getElementById('searchBox').oninput = applyFilterAndSort;
+  document.getElementById('sortSelect').onchange = applyFilterAndSort;
+}
+
+main();
+</script>
+</body>
+</html>

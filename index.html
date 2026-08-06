@@ -41,6 +41,13 @@
   button.secondary:hover{ background:#f3f4f6; }
   button:disabled{ opacity:.5; cursor:not-allowed; }
 
+  .sidebar-link{
+    display:block; text-align:center; text-decoration:none; margin:0 16px 12px;
+    font-size:13px; font-weight:600; color:var(--text); background:#fff;
+    border:1px solid var(--border); border-radius:6px; padding:8px 9px;
+  }
+  .sidebar-link:hover{ background:#f3f4f6; }
+
   label.row{ display:flex; align-items:center; gap:8px; font-size:13px; margin:8px 0; cursor:pointer; }
   label.row input{ width:auto; }
 
@@ -143,29 +150,16 @@
   </div>
 
   <div style="flex:1"></div>
+  <a href="poznamky.html" class="sidebar-link">Přehled všech poznámek</a>
   <div id="status">Načítám data…</div>
 </div>
 
 <div id="map"></div>
 <div id="toast"></div>
 
+<script src="config.js"></script>
 <script>
-/* ======================================================================
-   KONFIGURACE — uprav před nasazením
-   ====================================================================== */
-const CONFIG = {
-  // Cesta k CSV souboru s úseky (relativně k index.html)
-  CSV_URL: 'data.csv',
-
-  // URL nasazeného Google Apps Script Web Appu (viz README / Code.gs).
-  // Appka přes ni čte i zapisuje poznámky - Sheet samotný zůstává
-  // soukromý, přístup k němu má jen tvůj Google účet, pod kterým je
-  // skript nasazený.
-  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbzDhFA4JkzN71s0HgWbqbMO3B4REHu3-td4mLHk0Y0IbQixH5G3PnfJ9LucWWwpnYiEfQ/exec',
-
-  MAP_CENTER: [50.045, 14.47],
-  MAP_ZOOM: 12,
-};
+/* Konfigurace (CONFIG) je definovaná v config.js, sdíleném s poznamky.html */
 
 /* ======================================================================
    STAV APLIKACE
@@ -175,6 +169,7 @@ let features = [];              // pole {id, props:{...}, latlngs:[...]}
 let notesByUsek = new Map();    // UsekId -> [ {autor, text, cas} ]
 let currentMode = 'ss';         // ss | vyhl | diff | diff_pct
 let currentVehicle = 'total';   // total | heavy
+let layerById = new Map();      // UsekId -> L.Polyline (aktuálně vykreslená vrstva)
 
 const COLOR_PURPLE = '#8e44ad';
 const COLOR_GREEN = '#2e8b57';
@@ -500,6 +495,7 @@ function redraw() {
 
   const group = L.layerGroup();
   const labelCandidates = [];
+  layerById = new Map();
 
   features.forEach(f => {
     if (!passesNotesFilter(f)) return;
@@ -518,6 +514,7 @@ function redraw() {
     const line = L.polyline(f.latlngs, style);
     line.on('click', () => openPopup(line, f));
     line.addTo(group);
+    layerById.set(String(f.id), line);
 
     if (showLabels) {
       const text = tooltipLabelText(c);
@@ -675,6 +672,49 @@ function showToast(msg) {
 }
 
 /* ======================================================================
+   ZVÝRAZNĚNÍ ÚSEKU PODLE URL (odkaz z přehledu poznámek)
+   ====================================================================== */
+function highlightUsekFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const usekId = params.get('usek');
+  if (!usekId) return;
+
+  // ať je cílový úsek jistě vidět, vypneme filtry, které by ho mohly skrýt
+  document.getElementById('notesFilter').checked = false;
+  document.getElementById('valueFilterMin').value = '';
+  document.getElementById('valueFilterMax').value = '';
+  redraw();
+
+  const f = features.find(x => String(x.id) === String(usekId));
+  if (!f) { showToast(`Úsek ${usekId} nebyl nalezen.`); return; }
+
+  const bounds = L.latLngBounds(f.latlngs);
+  map.fitBounds(bounds, { padding: [120, 120], maxZoom: 16 });
+
+  const line = layerById.get(String(usekId));
+  if (line) {
+    // zvýrazňující "pulz" - dočasný silný obrys kolem úseku
+    const pulse = L.polyline(f.latlngs, {
+      color: '#facc15', weight: (line.options.weight || 4) + 10, opacity: 0.85,
+    }).addTo(map);
+    pulse.bringToBack();
+    let visible = true;
+    let ticks = 0;
+    const blink = setInterval(() => {
+      visible = !visible;
+      pulse.setStyle({ opacity: visible ? 0.85 : 0.15 });
+      ticks++;
+      if (ticks >= 6) {
+        clearInterval(blink);
+        setTimeout(() => map.removeLayer(pulse), 800);
+      }
+    }, 450);
+
+    setTimeout(() => openPopup(line, f), 350);
+  }
+}
+
+/* ======================================================================
    START
    ====================================================================== */
 async function main() {
@@ -726,6 +766,8 @@ async function main() {
     const bounds = L.latLngBounds(features.flatMap(f => f.latlngs));
     map.fitBounds(bounds, { padding: [20, 20] });
   }
+
+  highlightUsekFromUrl();
 }
 
 main();

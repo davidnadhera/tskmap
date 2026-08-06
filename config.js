@@ -62,7 +62,8 @@ function requireAuth() {
 
     async function tryPassword(pw, showErrors) {
       try {
-        const res = await fetch(AUTH.withPw(`${CONFIG.APPS_SCRIPT_URL}?action=ping`));
+        const url = `${CONFIG.APPS_SCRIPT_URL}?action=ping&pw=${encodeURIComponent(pw)}`;
+        const res = await fetch(url);
         const result = await res.json().catch(() => ({ ok: false }));
         if (result.ok) return true;
         if (showErrors) errorEl.textContent = result.error || 'Nesprávné heslo.';

@@ -58,9 +58,45 @@
   a.map-link:hover{ background:var(--accent-dark); }
 
   .empty{ color:var(--muted); font-size:14px; padding:30px 0; text-align:center; }
+
+  #authOverlay{
+    display:none; position:fixed; inset:0; z-index:5000;
+    background:rgba(17,24,39,0.55); align-items:center; justify-content:center;
+  }
+  #authOverlay .auth-box{
+    background:#fff; border-radius:12px; padding:28px 26px; width:320px;
+    max-width:90vw; box-shadow:0 10px 40px rgba(0,0,0,0.25);
+  }
+  #authOverlay h2{ font-size:16px; margin:0 0 4px; }
+  #authOverlay .sub{ font-size:12px; color:var(--muted); margin:0 0 16px; }
+  #authOverlay input{
+    font-family:inherit; font-size:13px; border:1px solid var(--border); border-radius:6px;
+    padding:7px 9px; width:100%; box-sizing:border-box; background:#fff; color:var(--text);
+    margin-bottom:10px;
+  }
+  #authOverlay button{
+    font-family:inherit; font-size:13px; border:none; border-radius:6px; padding:7px 9px;
+    width:100%; cursor:pointer; background:var(--accent); color:#fff; font-weight:600;
+  }
+  #authOverlay button:hover{ background:var(--accent-dark); }
+  #authOverlay button:disabled{ opacity:.5; cursor:not-allowed; }
+  #authOverlay .auth-error{ font-size:12px; color:#b91c1c; min-height:16px; margin-bottom:6px; }
 </style>
 </head>
 <body>
+
+<div id="authOverlay">
+  <div class="auth-box">
+    <h2>Přístup k poznámkám</h2>
+    <p class="sub">Zadej jméno a heslo.</p>
+    <form id="authForm">
+      <input type="text" id="authName" placeholder="Jméno" autocomplete="name">
+      <input type="password" id="authPw" placeholder="Heslo" autocomplete="current-password">
+      <div class="auth-error" id="authError"></div>
+      <button type="submit" id="authSubmit">Vstoupit</button>
+    </form>
+  </div>
+</div>
 
 <div class="topbar">
   <div>
@@ -104,7 +140,7 @@ function fmtDate(iso) {
 }
 
 async function loadNotes() {
-  const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=list`);
+  const res = await fetch(AUTH.withPw(`${CONFIG.APPS_SCRIPT_URL}?action=list`));
   if (!res.ok) throw new Error(await res.text());
   const list = await res.json();
   return list
@@ -165,6 +201,8 @@ function render(rows) {
 }
 
 async function main() {
+  await requireAuth();
+
   try {
     allNotes = await loadNotes();
     document.getElementById('status').style.display = 'none';

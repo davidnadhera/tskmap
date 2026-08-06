@@ -78,6 +78,19 @@
   .note-form textarea{ resize:vertical; min-height:50px; }
   .note-form .hint{ font-size:11px; color:var(--muted); margin-bottom:6px; }
 
+  #authOverlay{
+    display:none; position:fixed; inset:0; z-index:5000;
+    background:rgba(17,24,39,0.55); align-items:center; justify-content:center;
+  }
+  #authOverlay .auth-box{
+    background:#fff; border-radius:12px; padding:28px 26px; width:320px;
+    max-width:90vw; box-shadow:0 10px 40px rgba(0,0,0,0.25);
+  }
+  #authOverlay h2{ font-size:16px; margin:0 0 4px; }
+  #authOverlay .sub{ font-size:12px; color:var(--muted); margin:0 0 16px; }
+  #authOverlay input{ margin-bottom:10px; }
+  #authOverlay .auth-error{ font-size:12px; color:#b91c1c; min-height:16px; margin-bottom:6px; }
+
   .usek-label{
     background:rgba(255,255,255,.92); border:1px solid var(--border); border-radius:4px;
     padding:1px 5px; font-size:11px; font-weight:600; color:var(--text); box-shadow:none;
@@ -93,6 +106,19 @@
 </style>
 </head>
 <body>
+
+<div id="authOverlay">
+  <div class="auth-box">
+    <h2>Přístup k mapě</h2>
+    <p class="sub">Zadej jméno a heslo. Jméno se uloží a použije u tvých poznámek.</p>
+    <form id="authForm">
+      <input type="text" id="authName" placeholder="Jméno" autocomplete="name">
+      <input type="password" id="authPw" placeholder="Heslo" autocomplete="current-password">
+      <div class="auth-error" id="authError"></div>
+      <button type="submit" id="authSubmit">Vstoupit</button>
+    </form>
+  </div>
+</div>
 
 <div id="sidebar">
 
@@ -200,8 +226,9 @@ function wktLineToLatLngs(wkt) {
 }
 
 function loadCsv() {
+  const url = AUTH.withPw(`${CONFIG.APPS_SCRIPT_URL}?action=csv&v=${Date.now()}`);
   return new Promise((resolve, reject) => {
-    Papa.parse(`${CONFIG.CSV_URL}?v=${Date.now()}`, {
+    Papa.parse(url, {
       download: true,
       delimiter: ';',
       complete: (result) => {
@@ -604,7 +631,7 @@ function formatDate(iso) {
    ====================================================================== */
 async function loadNotes() {
   try {
-    const res = await fetch(`${CONFIG.APPS_SCRIPT_URL}?action=list`);
+    const res = await fetch(AUTH.withPw(`${CONFIG.APPS_SCRIPT_URL}?action=list`));
     if (!res.ok) { console.warn('Nepodařilo se načíst poznámky', await res.text()); return; }
     const list = await res.json();
     notesByUsek = new Map();
@@ -639,7 +666,7 @@ async function submitNote(f) {
     const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ usekId: String(f.id), autor, text }),
+      body: JSON.stringify({ usekId: String(f.id), autor, text, pw: AUTH.getPassword() }),
     });
     const result = await res.json().catch(() => ({}));
     if (!res.ok || result.ok === false) throw new Error(result.error || 'Uložení selhalo');
@@ -715,9 +742,41 @@ function highlightUsekFromUrl() {
 }
 
 /* ======================================================================
+   ZAPAMATOVÁNÍ POSLEDNÍHO NASTAVENÍ
+   Ukládá jen UI volby (režim, filtry, pozici mapy) do localStorage -
+   žádná citlivá data, jen preference prohlížeče.
+   ====================================================================== */
+const UI_STATE_KEY = 'uiState';
+
+function saveUiState() {
+  const state = {
+    mode: currentMode,
+    vehicle: currentVehicle,
+    labels: document.getElementById('labelsToggle').checked,
+    notesOnly: document.getElementById('notesFilter').checked,
+    filterMin: document.getElementById('valueFilterMin').value,
+    filterMax: document.getElementById('valueFilterMax').value,
+    mapCenter: map.getCenter(),
+    mapZoom: map.getZoom(),
+  };
+  try { localStorage.setItem(UI_STATE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+}
+
+function loadUiState() {
+  try {
+    const raw = localStorage.getItem(UI_STATE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* ======================================================================
    START
    ====================================================================== */
 async function main() {
+  await requireAuth();
+
   initMap();
 
   const authorNameInput = document.getElementById('authorName');
@@ -728,25 +787,39 @@ async function main() {
     document.getElementById('valueFilterHint').textContent = `Rozsah v jednotkách: ${valueFilterUnitLabel()}`;
   }
 
+  // Obnovit uložené nastavení (pokud existuje), než se napojí event handlery
+  const savedState = loadUiState();
+  if (savedState) {
+    if (savedState.mode) { currentMode = savedState.mode; document.getElementById('modeSelect').value = savedState.mode; }
+    if (savedState.vehicle) { currentVehicle = savedState.vehicle; document.getElementById('vehicleSelect').value = savedState.vehicle; }
+    if (typeof savedState.labels === 'boolean') document.getElementById('labelsToggle').checked = savedState.labels;
+    if (typeof savedState.notesOnly === 'boolean') document.getElementById('notesFilter').checked = savedState.notesOnly;
+    if (savedState.filterMin) document.getElementById('valueFilterMin').value = savedState.filterMin;
+    if (savedState.filterMax) document.getElementById('valueFilterMax').value = savedState.filterMax;
+  }
+
   document.getElementById('modeSelect').onchange = (e) => {
     currentMode = e.target.value;
     document.getElementById('valueFilterMin').value = '';
     document.getElementById('valueFilterMax').value = '';
     updateValueFilterUI();
     redraw();
+    saveUiState();
   };
   document.getElementById('vehicleSelect').onchange = (e) => {
     currentVehicle = e.target.value;
     redraw();
+    saveUiState();
   };
-  document.getElementById('labelsToggle').onchange = redraw;
-  document.getElementById('notesFilter').onchange = redraw;
-  document.getElementById('valueFilterMin').onchange = redraw;
-  document.getElementById('valueFilterMax').onchange = redraw;
+  document.getElementById('labelsToggle').onchange = () => { redraw(); saveUiState(); };
+  document.getElementById('notesFilter').onchange = () => { redraw(); saveUiState(); };
+  document.getElementById('valueFilterMin').onchange = () => { redraw(); saveUiState(); };
+  document.getElementById('valueFilterMax').onchange = () => { redraw(); saveUiState(); };
   document.getElementById('valueFilterReset').onclick = () => {
     document.getElementById('valueFilterMin').value = '';
     document.getElementById('valueFilterMax').value = '';
     redraw();
+    saveUiState();
   };
   updateValueFilterUI();
 
@@ -762,10 +835,21 @@ async function main() {
   await loadNotes();
 
   redraw();
-  if (features.length) {
+
+  // Pozice mapy: pokud přicházíme z odkazu na konkrétní úsek (?usek=),
+  // ten má přednost. Jinak obnovíme uloženou pozici, případně dopočítáme
+  // pohled na všechny úseky (poprvé spuštěná appka).
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('usek')) {
+    // ponecháno na highlightUsekFromUrl() níže
+  } else if (savedState && savedState.mapCenter && typeof savedState.mapZoom === 'number') {
+    map.setView(savedState.mapCenter, savedState.mapZoom);
+  } else if (features.length) {
     const bounds = L.latLngBounds(features.flatMap(f => f.latlngs));
     map.fitBounds(bounds, { padding: [20, 20] });
   }
+
+  map.on('moveend zoomend', saveUiState);
 
   highlightUsekFromUrl();
 }

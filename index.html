@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TSK - mapa modelových intenzit</title>
+<title>Intenzity dopravy – úseky</title>
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -90,8 +90,8 @@
 <div id="sidebar">
 
   <div class="sb-section">
-    <h1>Očekávané dopady zprovoznění PO 511, přeložky I/12 a dalších staveb</h1>
-    <p class="sub">Vizualizace modelových intenzit</p>
+    <h1>Intenzity dopravy</h1>
+    <p class="sub">Vizualizace úseků podle intenzit</p>
   </div>
 
   <div class="sb-section">
@@ -118,6 +118,15 @@
       <input type="checkbox" id="notesFilter">
       Zobrazit jen úseky s poznámkou
     </label>
+
+    <h2 style="margin-top:12px;" id="valueFilterLabel">Filtr hodnot</h2>
+    <div class="field" style="display:flex; gap:8px; align-items:center;">
+      <input type="text" id="valueFilterMin" placeholder="od" inputmode="decimal" style="text-align:right;">
+      <span class="sub" style="flex:none;">–</span>
+      <input type="text" id="valueFilterMax" placeholder="do" inputmode="decimal">
+    </div>
+    <p class="sub" id="valueFilterHint" style="margin-top:-4px; margin-bottom:8px;"></p>
+    <button class="secondary" id="valueFilterReset" type="button">Zrušit filtr hodnot</button>
   </div>
 
   <div class="sb-section">
@@ -386,6 +395,34 @@ function passesNotesFilter(f) {
   return notes.length > 0;
 }
 
+// Filtr hodnot: rozsah [min, max] se vztahuje na hodnotu aktuálního
+// režimu zobrazení (intenzita / absolutní rozdíl / rozdíl v %). U módů
+// diff a diff_pct se filtruje podle skutečné (znaménkové) hodnoty, takže
+// lze zadáním záporného min / kladného max vybrat jen nárůsty nebo jen
+// poklesy.
+function valueFilterUnitLabel() {
+  if (currentMode === 'ss' || currentMode === 'vyhl') return 'vozidel/24h';
+  if (currentMode === 'diff') return 'vozidel/24h (rozdíl)';
+  return '% (rozdíl)';
+}
+
+function valueFilterRange() {
+  const minEl = document.getElementById('valueFilterMin');
+  const maxEl = document.getElementById('valueFilterMax');
+  const min = minEl.value.trim() === '' ? null : parseNumber(minEl.value);
+  const max = maxEl.value.trim() === '' ? null : parseNumber(maxEl.value);
+  return { min, max };
+}
+
+function passesValueFilter(f, c) {
+  const { min, max } = valueFilterRange();
+  if (min === null && max === null) return true;
+  if (c.value === null || c.value === undefined || isNaN(c.value)) return false;
+  if (min !== null && c.value < min) return false;
+  if (max !== null && c.value > max) return false;
+  return true;
+}
+
 function midpoint(latlngs) {
   // střední bod podle délky linie (ne jen prostřední vrchol), ať popisek
   // sedí i u dlouhých/nerovnoměrně vedených úseků
@@ -468,6 +505,7 @@ function redraw() {
     if (!passesNotesFilter(f)) return;
     const style = styleFn(f);
     const c = style.computed;
+    if (!passesValueFilter(f, c)) return;
 
     // v režimech "Intenzity" schovej úseky s nulovou hodnotou zvolené veličiny
     if ((currentMode === 'ss' || currentMode === 'vyhl') && c.value === 0) return;
@@ -533,10 +571,10 @@ function popupHtml(f) {
     <table class="attr-table">
       <tr><td class="k">Celkem – současný stav</td><td class="v">${fmt(p.total_ss)}</td></tr>
       <tr><td class="k">Celkem – výhled</td><td class="v">${fmt(p.total_vyhl)}</td></tr>
-      <tr><td class="k">z toho nad 3,5 t – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
-      <tr><td class="k">z toho nad 3,5 t – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
+      <tr><td class="k">Nákladní – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
+      <tr><td class="k">Nákladní – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
       <tr><td class="k">Změna – celkem</td><td class="v">${fmtChange(chg.total.diff, chg.total.pct, chg.total.isNew)}</td></tr>
-      <tr><td class="k">Změna – pouze nad 3,5 t</td><td class="v">${fmtChange(chg.heavy.diff, chg.heavy.pct, chg.heavy.isNew)}</td></tr>
+      <tr><td class="k">Změna – nákladní</td><td class="v">${fmtChange(chg.heavy.diff, chg.heavy.pct, chg.heavy.isNew)}</td></tr>
     </table>
     <div class="notes-list">${notesHtml}</div>
     ${formHtml}
@@ -589,8 +627,8 @@ async function submitNote(f) {
   const textarea = document.getElementById(`noteText_${f.id}`);
   const autor = authorInput.value.trim();
   const text = textarea.value.trim();
-  if (!text) { showToast('Napište text poznámky.'); return; }
-  if (!autor) { showToast('Vyplňte prosím jméno.'); return; }
+  if (!text) { showToast('Napiš text poznámky.'); return; }
+  if (!autor) { showToast('Vyplň prosím jméno.'); return; }
 
   localStorage.setItem('authorName', autor);
   document.getElementById('authorName').value = autor;
@@ -619,7 +657,7 @@ async function submitNote(f) {
     showToast('Poznámka uložena.');
   } catch (e) {
     console.error(e);
-    showToast('Uložení se nezdařilo. Zkontrolujte nastavení Apps Scriptu.');
+    showToast('Uložení se nezdařilo. Zkontroluj nastavení Apps Scriptu.');
     btn.disabled = false; btn.textContent = 'Přidat poznámku';
   }
 }
@@ -646,8 +684,15 @@ async function main() {
   authorNameInput.value = localStorage.getItem('authorName') || '';
   authorNameInput.onchange = () => localStorage.setItem('authorName', authorNameInput.value.trim());
 
+  function updateValueFilterUI() {
+    document.getElementById('valueFilterHint').textContent = `Rozsah v jednotkách: ${valueFilterUnitLabel()}`;
+  }
+
   document.getElementById('modeSelect').onchange = (e) => {
     currentMode = e.target.value;
+    document.getElementById('valueFilterMin').value = '';
+    document.getElementById('valueFilterMax').value = '';
+    updateValueFilterUI();
     redraw();
   };
   document.getElementById('vehicleSelect').onchange = (e) => {
@@ -656,6 +701,14 @@ async function main() {
   };
   document.getElementById('labelsToggle').onchange = redraw;
   document.getElementById('notesFilter').onchange = redraw;
+  document.getElementById('valueFilterMin').onchange = redraw;
+  document.getElementById('valueFilterMax').onchange = redraw;
+  document.getElementById('valueFilterReset').onclick = () => {
+    document.getElementById('valueFilterMin').value = '';
+    document.getElementById('valueFilterMax').value = '';
+    redraw();
+  };
+  updateValueFilterUI();
 
   try {
     features = await loadCsv();

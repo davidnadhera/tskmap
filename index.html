@@ -862,6 +862,7 @@ function onModeCheckboxChange(m, input) {
   }
   if (input.checked) selectedLabelModes.add(m.key);
   else selectedLabelModes.delete(m.key);
+  updateLabelLockStyles();
   redraw();
   saveUiState();
 }
@@ -882,19 +883,31 @@ function syncLabelVariantCheckboxes() {
 // na hlavních selectech (jen jako nápověda - viz onModeCheckboxChange
 // pro veličinu; u vozidla je zapnutí striktně vynucené)
 function updateLabelLockStyles() {
+  const currentChecked = selectedLabelModes.has(currentMode);
   LABEL_MODE_OPTIONS.forEach(m => {
     const input = document.getElementById(`labelMode_${m.key}`);
     if (!input) return;
-    const current = m.key === currentMode;
-    input.parentElement.title = current
-      ? 'Popisek aktuálního režimu zobrazení: vypnout jde jen jako poslední, zapnout jen jako první.'
-      : '';
+    let disabledLook = false;
+    let title = '';
+    if (m.key === currentMode) {
+      if (input.checked && selectedLabelModes.size > 1) {
+        disabledLook = true;
+        title = 'Popisek aktuálního režimu zobrazení jde vypnout jen jako poslední.';
+      }
+    } else if (!input.checked && !currentChecked) {
+      disabledLook = true;
+      title = 'Nejdřív je nutné zapnout popisek aktuálního režimu zobrazení.';
+    }
+    input.parentElement.style.opacity = disabledLook ? '0.6' : '';
+    input.parentElement.style.cursor = disabledLook ? 'not-allowed' : '';
+    input.parentElement.title = title;
   });
   LABEL_VEHICLE_OPTIONS.forEach(v => {
     const input = document.getElementById(`labelVehicle_${v.key}`);
     if (!input) return;
     const locked = v.key === currentVehicle;
     input.parentElement.style.opacity = locked ? '0.6' : '';
+    input.parentElement.style.cursor = locked ? 'not-allowed' : '';
     input.parentElement.title = locked ? 'Popisek aktuálně zvoleného vozidla nelze vypnout.' : '';
   });
 }

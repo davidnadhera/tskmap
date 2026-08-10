@@ -814,14 +814,33 @@ function syncLabelVariantCheckboxes() {
   });
 }
 
-// Volá se při změně režimu nebo vozidla (tedy při změně toho, co ovládá
-// grafiku čáry). Popisek se sám nemění, pokud už novou variantu obsahuje
-// nebo pokud je prázdný; jinak se přepne na výhradně tuto jednu variantu.
+// Volá se při změně režimu (grafiky čáry). Popisek se sám nemění, pokud
+// už novou variantu obsahuje nebo pokud je prázdný; jinak se přepne na
+// výhradně tuto jednu variantu.
 function adjustLabelSelectionOnRegimeChange() {
   const newKey = variantKey(currentMode, currentVehicle);
   if (selectedLabelVariants.size === 0) return;               // žádný popisek -> žádný popisek
   if (selectedLabelVariants.has(newKey)) return;               // B je v popisku -> neměnit
   selectedLabelVariants = new Set([newKey]);                   // jinak -> jen B
+  syncLabelVariantCheckboxes();
+}
+
+// Volá se při přepnutí vozidla (vše <-> nad 3,5 t). Na rozdíl od změny
+// režimu se tady nepřepíná celý výběr na jedinou variantu, ale pravidlo
+// se aplikuje samostatně pro každý ze 4 režimů zobrazení:
+//  - byl vybraný jen pro staré vozidlo -> přepne se na nové vozidlo
+//  - nebyl vybraný vůbec -> zůstane nevybraný
+//  - jinak (vybraný pro nové vozidlo, případně pro obě) -> beze změny
+function adjustLabelSelectionOnVehicleChange(oldVehicle, newVehicle) {
+  const modes = ['ss', 'vyhl', 'diff', 'diff_pct'];
+  modes.forEach(mode => {
+    const oldKey = variantKey(mode, oldVehicle);
+    const newKey = variantKey(mode, newVehicle);
+    if (selectedLabelVariants.has(oldKey) && !selectedLabelVariants.has(newKey)) {
+      selectedLabelVariants.delete(oldKey);
+      selectedLabelVariants.add(newKey);
+    }
+  });
   syncLabelVariantCheckboxes();
 }
 
@@ -897,8 +916,9 @@ async function main() {
     saveUiState();
   };
   document.getElementById('vehicleSelect').onchange = (e) => {
+    const oldVehicle = currentVehicle;
     currentVehicle = e.target.value;
-    adjustLabelSelectionOnRegimeChange();
+    adjustLabelSelectionOnVehicleChange(oldVehicle, currentVehicle);
     redraw();
     saveUiState();
   };

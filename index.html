@@ -794,7 +794,9 @@ function highlightUsekFromUrl() {
    VÝBĚR VARIANT POPISKU (UI)
    ====================================================================== */
 function renderLabelVariantCheckboxes() {
-  // sada "veličina" - lze vybrat 0 až 4
+  // sada "veličina" - lze vybrat i 0 (žádné popisky), ale checkbox
+  // aktuálního režimu zobrazení (modeSelect) jde vypnout jen jako
+  // poslední a zapnout jen jako první (viz onModeCheckboxChange)
   const modeEl = document.getElementById('labelModeVariants');
   modeEl.innerHTML = '';
   LABEL_MODE_OPTIONS.forEach(m => {
@@ -806,15 +808,11 @@ function renderLabelVariantCheckboxes() {
 
     const input = wrap.querySelector('input');
     input.checked = selectedLabelModes.has(m.key);
-    input.onchange = () => {
-      if (input.checked) selectedLabelModes.add(m.key);
-      else selectedLabelModes.delete(m.key);
-      redraw();
-      saveUiState();
-    };
+    input.onchange = () => onModeCheckboxChange(m, input);
   });
 
-  // sada "vozidla" - vždy musí zůstat vybrané aspoň jedno
+  // sada "vozidla" - checkbox odpovídající aktuálnímu vozidlu
+  // (vehicleSelect) nejde vypnout
   const vehEl = document.getElementById('labelVehicleVariants');
   vehEl.innerHTML = '';
   LABEL_VEHICLE_OPTIONS.forEach(v => {
@@ -827,8 +825,8 @@ function renderLabelVariantCheckboxes() {
     const input = wrap.querySelector('input');
     input.checked = selectedLabelVehicles.has(v.key);
     input.onchange = () => {
-      if (!input.checked && selectedLabelVehicles.size <= 1) {
-        // nejde odškrtnout poslední zbývající volbu
+      if (!input.checked && v.key === currentVehicle) {
+        // popisek aktuálně zvoleného vozidla nejde vypnout
         input.checked = true;
         return;
       }
@@ -838,6 +836,34 @@ function renderLabelVariantCheckboxes() {
       saveUiState();
     };
   });
+
+  updateLabelLockStyles();
+}
+
+// Checkbox veličiny odpovídající aktuálnímu režimu zobrazení (currentMode)
+// se chová jinak než ostatní:
+// - vypnout ho jde jen tehdy, když je zapnutý jako jediný (je "poslední
+//   na řadě" - dřív musí uživatel vypnout ostatní)
+// - ostatní veličiny jde zapnout jen tehdy, když je aktuální režim už
+//   zapnutý (je "první na řadě" - musí se zapnout jako první)
+// Tím nejde dostat do stavu, kdy svítí nějaký popisek, ale ne ten pro
+// aktuálně vybraný režim.
+function onModeCheckboxChange(m, input) {
+  if (m.key === currentMode) {
+    if (!input.checked && selectedLabelModes.size > 1) {
+      input.checked = true; // musí se nejdřív vypnout ostatní veličiny
+      return;
+    }
+  } else {
+    if (input.checked && !selectedLabelModes.has(currentMode)) {
+      input.checked = false; // aktuální režim musí být zapnutý jako první
+      return;
+    }
+  }
+  if (input.checked) selectedLabelModes.add(m.key);
+  else selectedLabelModes.delete(m.key);
+  redraw();
+  saveUiState();
 }
 
 function syncLabelVariantCheckboxes() {
@@ -849,25 +875,44 @@ function syncLabelVariantCheckboxes() {
     const input = document.getElementById(`labelVehicle_${v.key}`);
     if (input) input.checked = selectedLabelVehicles.has(v.key);
   });
+  updateLabelLockStyles();
+}
+
+// vizuálně odliší checkbox odpovídající aktuálně zvolenému režimu/vozidlu
+// na hlavních selectech (jen jako nápověda - viz onModeCheckboxChange
+// pro veličinu; u vozidla je zapnutí striktně vynucené)
+function updateLabelLockStyles() {
+  LABEL_MODE_OPTIONS.forEach(m => {
+    const input = document.getElementById(`labelMode_${m.key}`);
+    if (!input) return;
+    const current = m.key === currentMode;
+    input.parentElement.title = current
+      ? 'Popisek aktuálního režimu zobrazení: vypnout jde jen jako poslední, zapnout jen jako první.'
+      : '';
+  });
+  LABEL_VEHICLE_OPTIONS.forEach(v => {
+    const input = document.getElementById(`labelVehicle_${v.key}`);
+    if (!input) return;
+    const locked = v.key === currentVehicle;
+    input.parentElement.style.opacity = locked ? '0.6' : '';
+    input.parentElement.title = locked ? 'Popisek aktuálně zvoleného vozidla nelze vypnout.' : '';
+  });
 }
 
 // Volá se při změně režimu zobrazení (grafiky čáry, modeSelect).
-// Popisek dle veličiny se sám nemění, pokud už nový režim obsahuje nebo
-// pokud není vybraná žádná veličina; jinak se přepne na výhradně tento
-// jeden režim.
 function adjustLabelSelectionOnRegimeChange() {
-  if (selectedLabelModes.size === 0) return;                  // žádný popisek -> žádný popisek
-  if (selectedLabelModes.has(currentMode)) return;             // B je vybráno -> beze změny
-  selectedLabelModes = new Set([currentMode]);                 // jinak -> jen B
+  if (selectedLabelModes.size === 0) { updateLabelLockStyles(); return; }  // žádný popisek -> žádný popisek
+  if (selectedLabelModes.has(currentMode)) { updateLabelLockStyles(); return; } // B je vybráno -> beze změny
+  selectedLabelModes = new Set([currentMode]);                            // jinak -> jen B
   syncLabelVariantCheckboxes();
 }
 
 // Volá se při přepnutí vozidla (vše <-> nad 3,5 t, vehicleSelect).
-// Pokud je nové vozidlo už v popisku vybrané, nic se neděje; jinak se
-// výběr přepne na výhradně toto vozidlo.
+// Pokud nové vozidlo ještě není mezi vybranými v popisku, výběr se
+// zúží jen na něj - popisek aktuálního vozidla je tak vždy zapnutý.
 function adjustLabelSelectionOnVehicleChange() {
-  if (selectedLabelVehicles.has(currentVehicle)) return;       // B je vybráno -> beze změny
-  selectedLabelVehicles = new Set([currentVehicle]);           // jinak -> jen B
+  if (selectedLabelVehicles.has(currentVehicle)) { updateLabelLockStyles(); return; }
+  selectedLabelVehicles = new Set([currentVehicle]);
   syncLabelVariantCheckboxes();
 }
 
@@ -937,6 +982,9 @@ async function main() {
   }
 
   renderLabelVariantCheckboxes();
+  // pojistka: aktuální režim/vozidlo musí být v popisku vždy zapnuté
+  adjustLabelSelectionOnRegimeChange();
+  adjustLabelSelectionOnVehicleChange();
 
   document.getElementById('modeSelect').onchange = (e) => {
     currentMode = e.target.value;

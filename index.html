@@ -193,7 +193,7 @@
 /* ======================================================================
    STAV APLIKACE
    ======================================================================= */
-let map, geoLayer;
+let map, lineLayer, labelLayer;
 let features = [];              // pole {id, props:{...}, latlngs:[...]}
 let notesByUsek = new Map();    // UsekId -> [ {autor, text, cas} ]
 let currentMode = 'ss';         // ss | vyhl | diff | diff_pct
@@ -440,7 +440,7 @@ function initMap() {
   }).addTo(map);
   // pri zmene zoomu se meni vzdalenost popisku na obrazovce v pixelech,
   // takze je potreba prepocitat, ktere se preskoci kvuli prekryvu
-  map.on('zoomend', () => redraw());
+  map.on('zoomend', () => redrawLabels());
 }
 
 function passesNotesFilter(f) {
@@ -564,14 +564,22 @@ function placeNonOverlappingLabels(candidates, group) {
   });
 }
 
-function redraw() {
+// Vykreslení je rozdělené na dvě fáze kvůli výkonu:
+// - redrawLines() staví polyline vrstvu (barvy/tloušťky/filtr) - drahé,
+//   potřeba jen když se mění režim, vozidlo nebo filtry
+// - redrawLabels() staví jen popiskovou vrstvu z už vypočtených
+//   viditelných úseků (visibleFeatures) - levné, používá se při každé
+//   změně výběru popisků nebo při zoomu (mění se jen jejich rozmístění)
+// redraw() = obojí dohromady, pro případy kdy se mění obojí.
+let visibleFeatures = [];   // [{f, weight}] - úseky, které prošly filtry (po posledním redrawLines)
+
+function redrawLines() {
   const styleFn = styleForMetric();
-  if (geoLayer) map.removeLayer(geoLayer);
-  const showLabels = selectedLabelModes.size > 0;
+  if (lineLayer) map.removeLayer(lineLayer);
 
   const group = L.layerGroup();
-  const labelCandidates = [];
   layerById = new Map();
+  visibleFeatures = [];
 
   features.forEach(f => {
     if (!passesNotesFilter(f)) return;
@@ -592,18 +600,33 @@ function redraw() {
     line.addTo(group);
     layerById.set(String(f.id), line);
 
-    if (showLabels) {
-      const text = combinedLabelText(f);
-      if (text) {
-        labelCandidates.push({ latlng: midpoint(f.latlngs), text, weight: style.weight });
-      }
-    }
+    visibleFeatures.push({ f, weight: style.weight });
   });
-  geoLayer = group.addTo(map);
+  lineLayer = group.addTo(map);
+}
+
+function redrawLabels() {
+  if (labelLayer) map.removeLayer(labelLayer);
+  const group = L.layerGroup();
+  const showLabels = selectedLabelModes.size > 0;
 
   if (showLabels) {
+    const labelCandidates = [];
+    visibleFeatures.forEach(({ f, weight }) => {
+      const text = combinedLabelText(f);
+      if (text) {
+        // střední bod je předpočítaný jednou při načtení dat (viz loadCsv)
+        labelCandidates.push({ latlng: f.midpoint, text, weight });
+      }
+    });
     placeNonOverlappingLabels(labelCandidates, group);
   }
+  labelLayer = group.addTo(map);
+}
+
+function redraw() {
+  redrawLines();
+  redrawLabels();
 }
 
 /* ======================================================================
@@ -832,7 +855,7 @@ function renderLabelVariantCheckboxes() {
       }
       if (input.checked) selectedLabelVehicles.add(v.key);
       else selectedLabelVehicles.delete(v.key);
-      redraw();
+      redrawLabels();
       saveUiState();
     };
   });
@@ -863,7 +886,7 @@ function onModeCheckboxChange(m, input) {
   if (input.checked) selectedLabelModes.add(m.key);
   else selectedLabelModes.delete(m.key);
   updateLabelLockStyles();
-  redraw();
+  redrawLabels();
   saveUiState();
 }
 
@@ -1027,6 +1050,9 @@ async function main() {
 
   try {
     features = await loadCsv();
+    // střední bod se počítá jen jednou při načtení (nezávisí na výběru
+    // režimu/vozidla/popisků), ne při každém překreslení
+    features.forEach(f => { f.midpoint = midpoint(f.latlngs); });
     document.getElementById('status').textContent = `Načteno ${features.length} úseků.`;
   } catch (e) {
     console.error(e);

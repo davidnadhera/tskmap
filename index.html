@@ -159,8 +159,10 @@
 
   <div class="sb-section">
     <h2>Popisky – zobrazovaná veličina</h2>
-    <p class="sub" style="margin:-4px 0 8px;">Lze vybrat víc voleb, v popisku budou odděleny lomítkem. Bez výběru se popisky nezobrazí.</p>
-    <div id="labelVariants"></div>
+    <p class="sub" style="margin:-4px 0 8px;">Lze vybrat víc voleb, v popisku budou odděleny lomítkem. Bez výběru veličiny se popisky nezobrazí.</p>
+    <div id="labelModeVariants"></div>
+    <h2 style="margin-top:12px;">Popisky – vozidla</h2>
+    <div id="labelVehicleVariants"></div>
   </div>
 
   <div class="sb-section">
@@ -200,26 +202,28 @@ let layerById = new Map();      // UsekId -> L.Polyline (aktuálně vykreslená 
 
 /* ======================================================================
    VARIANTY POPISKŮ
-   Zobrazení popisku je teď nezávislé na "režimu" (ten řídí jen grafiku
-   čáry - barvu, tloušťku, filtr). Popisek může zobrazovat libovolnou
-   kombinaci z 8 variant (4 režimy x 2 typy vozidel) najednou, oddělené
-   lomítkem.
+   Zobrazení popisku je nezávislé na "režimu" (ten řídí jen grafiku čáry -
+   barvu, tloušťku, filtr). Popisek se skládá ze dvou nezávislých výběrů:
+   - veličina (režim): ss / vyhl / diff / diff_pct - lze vybrat 0 až 4,
+     při 0 se popisky nezobrazí vůbec
+   - vozidla: total / heavy - vždy musí být vybráno alespoň jedno
+   Zobrazí se všechny kombinace vybrané veličiny x vybraného vozidla,
+   oddělené lomítkem.
    ====================================================================== */
-const LABEL_VARIANTS = [
-  { key: 'ss_total',       mode: 'ss',       vehicle: 'total', label: 'Současný stav – všechna vozidla' },
-  { key: 'ss_heavy',       mode: 'ss',       vehicle: 'heavy', label: 'Současný stav – nad 3,5 t' },
-  { key: 'vyhl_total',     mode: 'vyhl',     vehicle: 'total', label: 'Výhled – všechna vozidla' },
-  { key: 'vyhl_heavy',     mode: 'vyhl',     vehicle: 'heavy', label: 'Výhled – nad 3,5 t' },
-  { key: 'diff_total',     mode: 'diff',     vehicle: 'total', label: 'Rozdíl – všechna vozidla' },
-  { key: 'diff_heavy',     mode: 'diff',     vehicle: 'heavy', label: 'Rozdíl – nad 3,5 t' },
-  { key: 'diff_pct_total', mode: 'diff_pct', vehicle: 'total', label: 'Rozdíl v % – všechna vozidla' },
-  { key: 'diff_pct_heavy', mode: 'diff_pct', vehicle: 'heavy', label: 'Rozdíl v % – nad 3,5 t' },
+const LABEL_MODE_OPTIONS = [
+  { key: 'ss',       label: 'Současný stav' },
+  { key: 'vyhl',     label: 'Výhled' },
+  { key: 'diff',     label: 'Rozdíl' },
+  { key: 'diff_pct', label: 'Rozdíl v %' },
+];
+const LABEL_VEHICLE_OPTIONS = [
+  { key: 'total', label: 'Všechna vozidla' },
+  { key: 'heavy', label: 'Nad 3,5 t' },
 ];
 
 // implicitně vybraná varianta odpovídá výchozímu režimu/vozidlu
-let selectedLabelVariants = new Set(['ss_total']);
-
-function variantKey(mode, vehicle) { return `${mode}_${vehicle}`; }
+let selectedLabelModes = new Set(['ss']);
+let selectedLabelVehicles = new Set(['total']);
 
 const COLOR_PURPLE = '#8e44ad';
 const COLOR_GREEN = '#2e8b57';
@@ -509,16 +513,19 @@ function tooltipLabelText(c, mode = currentMode) {
   return `${sign}${fmt(c.value)}`;
 }
 
-// spojí texty všech aktuálně vybraných variant popisku pro daný úsek,
-// oddělené lomítkem (varianty bez hodnoty - např. diff_pct na novém
-// úseku - se v popisku prostě vynechají)
+// spojí texty všech aktuálně vybraných kombinací veličina x vozidlo pro
+// daný úsek, oddělené lomítkem (varianty bez hodnoty - např. diff_pct na
+// novém úseku - se v popisku prostě vynechají)
 function combinedLabelText(f) {
   const parts = [];
-  LABEL_VARIANTS.forEach(v => {
-    if (!selectedLabelVariants.has(v.key)) return;
-    const c = computeForFeature(f, v.mode, v.vehicle);
-    const text = tooltipLabelText(c, v.mode);
-    if (text) parts.push(text);
+  LABEL_MODE_OPTIONS.forEach(m => {
+    if (!selectedLabelModes.has(m.key)) return;
+    LABEL_VEHICLE_OPTIONS.forEach(v => {
+      if (!selectedLabelVehicles.has(v.key)) return;
+      const c = computeForFeature(f, m.key, v.key);
+      const text = tooltipLabelText(c, m.key);
+      if (text) parts.push(text);
+    });
   });
   return parts.join(' / ');
 }
@@ -560,7 +567,7 @@ function placeNonOverlappingLabels(candidates, group) {
 function redraw() {
   const styleFn = styleForMetric();
   if (geoLayer) map.removeLayer(geoLayer);
-  const showLabels = selectedLabelVariants.size > 0;
+  const showLabels = selectedLabelModes.size > 0;
 
   const group = L.layerGroup();
   const labelCandidates = [];
@@ -787,20 +794,46 @@ function highlightUsekFromUrl() {
    VÝBĚR VARIANT POPISKU (UI)
    ====================================================================== */
 function renderLabelVariantCheckboxes() {
-  const el = document.getElementById('labelVariants');
-  el.innerHTML = '';
-  LABEL_VARIANTS.forEach(v => {
-    const id = `labelVariant_${v.key}`;
+  // sada "veličina" - lze vybrat 0 až 4
+  const modeEl = document.getElementById('labelModeVariants');
+  modeEl.innerHTML = '';
+  LABEL_MODE_OPTIONS.forEach(m => {
+    const id = `labelMode_${m.key}`;
+    const wrap = document.createElement('label');
+    wrap.className = 'row';
+    wrap.innerHTML = `<input type="checkbox" id="${id}"> ${m.label}`;
+    modeEl.appendChild(wrap);
+
+    const input = wrap.querySelector('input');
+    input.checked = selectedLabelModes.has(m.key);
+    input.onchange = () => {
+      if (input.checked) selectedLabelModes.add(m.key);
+      else selectedLabelModes.delete(m.key);
+      redraw();
+      saveUiState();
+    };
+  });
+
+  // sada "vozidla" - vždy musí zůstat vybrané aspoň jedno
+  const vehEl = document.getElementById('labelVehicleVariants');
+  vehEl.innerHTML = '';
+  LABEL_VEHICLE_OPTIONS.forEach(v => {
+    const id = `labelVehicle_${v.key}`;
     const wrap = document.createElement('label');
     wrap.className = 'row';
     wrap.innerHTML = `<input type="checkbox" id="${id}"> ${v.label}`;
-    el.appendChild(wrap);
+    vehEl.appendChild(wrap);
 
     const input = wrap.querySelector('input');
-    input.checked = selectedLabelVariants.has(v.key);
+    input.checked = selectedLabelVehicles.has(v.key);
     input.onchange = () => {
-      if (input.checked) selectedLabelVariants.add(v.key);
-      else selectedLabelVariants.delete(v.key);
+      if (!input.checked && selectedLabelVehicles.size <= 1) {
+        // nejde odškrtnout poslední zbývající volbu
+        input.checked = true;
+        return;
+      }
+      if (input.checked) selectedLabelVehicles.add(v.key);
+      else selectedLabelVehicles.delete(v.key);
       redraw();
       saveUiState();
     };
@@ -808,39 +841,33 @@ function renderLabelVariantCheckboxes() {
 }
 
 function syncLabelVariantCheckboxes() {
-  LABEL_VARIANTS.forEach(v => {
-    const input = document.getElementById(`labelVariant_${v.key}`);
-    if (input) input.checked = selectedLabelVariants.has(v.key);
+  LABEL_MODE_OPTIONS.forEach(m => {
+    const input = document.getElementById(`labelMode_${m.key}`);
+    if (input) input.checked = selectedLabelModes.has(m.key);
+  });
+  LABEL_VEHICLE_OPTIONS.forEach(v => {
+    const input = document.getElementById(`labelVehicle_${v.key}`);
+    if (input) input.checked = selectedLabelVehicles.has(v.key);
   });
 }
 
-// Volá se při změně režimu (grafiky čáry). Popisek se sám nemění, pokud
-// už novou variantu obsahuje nebo pokud je prázdný; jinak se přepne na
-// výhradně tuto jednu variantu.
+// Volá se při změně režimu zobrazení (grafiky čáry, modeSelect).
+// Popisek dle veličiny se sám nemění, pokud už nový režim obsahuje nebo
+// pokud není vybraná žádná veličina; jinak se přepne na výhradně tento
+// jeden režim.
 function adjustLabelSelectionOnRegimeChange() {
-  const newKey = variantKey(currentMode, currentVehicle);
-  if (selectedLabelVariants.size === 0) return;               // žádný popisek -> žádný popisek
-  if (selectedLabelVariants.has(newKey)) return;               // B je v popisku -> neměnit
-  selectedLabelVariants = new Set([newKey]);                   // jinak -> jen B
+  if (selectedLabelModes.size === 0) return;                  // žádný popisek -> žádný popisek
+  if (selectedLabelModes.has(currentMode)) return;             // B je vybráno -> beze změny
+  selectedLabelModes = new Set([currentMode]);                 // jinak -> jen B
   syncLabelVariantCheckboxes();
 }
 
-// Volá se při přepnutí vozidla (vše <-> nad 3,5 t). Na rozdíl od změny
-// režimu se tady nepřepíná celý výběr na jedinou variantu, ale pravidlo
-// se aplikuje samostatně pro každý ze 4 režimů zobrazení:
-//  - byl vybraný jen pro staré vozidlo -> přepne se na nové vozidlo
-//  - nebyl vybraný vůbec -> zůstane nevybraný
-//  - jinak (vybraný pro nové vozidlo, případně pro obě) -> beze změny
-function adjustLabelSelectionOnVehicleChange(oldVehicle, newVehicle) {
-  const modes = ['ss', 'vyhl', 'diff', 'diff_pct'];
-  modes.forEach(mode => {
-    const oldKey = variantKey(mode, oldVehicle);
-    const newKey = variantKey(mode, newVehicle);
-    if (selectedLabelVariants.has(oldKey) && !selectedLabelVariants.has(newKey)) {
-      selectedLabelVariants.delete(oldKey);
-      selectedLabelVariants.add(newKey);
-    }
-  });
+// Volá se při přepnutí vozidla (vše <-> nad 3,5 t, vehicleSelect).
+// Pokud je nové vozidlo už v popisku vybrané, nic se neděje; jinak se
+// výběr přepne na výhradně toto vozidlo.
+function adjustLabelSelectionOnVehicleChange() {
+  if (selectedLabelVehicles.has(currentVehicle)) return;       // B je vybráno -> beze změny
+  selectedLabelVehicles = new Set([currentVehicle]);           // jinak -> jen B
   syncLabelVariantCheckboxes();
 }
 
@@ -855,7 +882,8 @@ function saveUiState() {
   const state = {
     mode: currentMode,
     vehicle: currentVehicle,
-    labelVariants: Array.from(selectedLabelVariants),
+    labelModes: Array.from(selectedLabelModes),
+    labelVehicles: Array.from(selectedLabelVehicles),
     notesOnly: document.getElementById('notesFilter').checked,
     filterMin: document.getElementById('valueFilterMin').value,
     filterMax: document.getElementById('valueFilterMax').value,
@@ -895,9 +923,13 @@ async function main() {
   if (savedState) {
     if (savedState.mode) { currentMode = savedState.mode; document.getElementById('modeSelect').value = savedState.mode; }
     if (savedState.vehicle) { currentVehicle = savedState.vehicle; document.getElementById('vehicleSelect').value = savedState.vehicle; }
-    if (Array.isArray(savedState.labelVariants)) {
-      const valid = savedState.labelVariants.filter(k => LABEL_VARIANTS.some(v => v.key === k));
-      selectedLabelVariants = new Set(valid);
+    if (Array.isArray(savedState.labelModes)) {
+      const valid = savedState.labelModes.filter(k => LABEL_MODE_OPTIONS.some(m => m.key === k));
+      selectedLabelModes = new Set(valid);
+    }
+    if (Array.isArray(savedState.labelVehicles)) {
+      const valid = savedState.labelVehicles.filter(k => LABEL_VEHICLE_OPTIONS.some(v => v.key === k));
+      if (valid.length) selectedLabelVehicles = new Set(valid);   // aspoň jedno musí zůstat vybrané
     }
     if (typeof savedState.notesOnly === 'boolean') document.getElementById('notesFilter').checked = savedState.notesOnly;
     if (savedState.filterMin) document.getElementById('valueFilterMin').value = savedState.filterMin;
@@ -916,9 +948,8 @@ async function main() {
     saveUiState();
   };
   document.getElementById('vehicleSelect').onchange = (e) => {
-    const oldVehicle = currentVehicle;
     currentVehicle = e.target.value;
-    adjustLabelSelectionOnVehicleChange(oldVehicle, currentVehicle);
+    adjustLabelSelectionOnVehicleChange();
     redraw();
     saveUiState();
   };

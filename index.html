@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+měru<!DOCTYPE html>
 <html lang="cs">
 <head>
 <meta charset="UTF-8">
@@ -130,9 +130,9 @@
   <div class="sb-section">
     <h2>Režim zobrazení</h2>
     <select id="modeSelect">
-      <option value="ss">Intenzity – současný stav</option>
-      <option value="vyhl">Intenzity – výhledový stav</option>
-      <option value="diff">Rozdíl (výhled − současnost)</option>
+      <option value="ss">Intenzity – výhled bez záměru</option>
+      <option value="vyhl">Intenzity – výhled se záměrem</option>
+      <option value="diff">Rozdíl (se záměrem - bez záměru)</option>
       <option value="diff_pct">Rozdíl v procentech</option>
     </select>
 
@@ -211,8 +211,8 @@ let layerById = new Map();      // UsekId -> L.Polyline (aktuálně vykreslená 
    oddělené lomítkem.
    ====================================================================== */
 const LABEL_MODE_OPTIONS = [
-  { key: 'ss',       label: 'Současný stav' },
-  { key: 'vyhl',     label: 'Výhled' },
+  { key: 'ss',       label: 'Bez záměru' },
+  { key: 'vyhl',     label: 'Se záměrem' },
   { key: 'diff',     label: 'Rozdíl' },
   { key: 'diff_pct', label: 'Rozdíl v %' },
 ];
@@ -665,10 +665,10 @@ function popupHtml(f) {
 
   return `
     <table class="attr-table">
-      <tr><td class="k">Celkem – současný stav</td><td class="v">${fmt(p.total_ss)}</td></tr>
-      <tr><td class="k">Celkem – výhled</td><td class="v">${fmt(p.total_vyhl)}</td></tr>
-      <tr><td class="k">Nákladní – současný stav</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
-      <tr><td class="k">Nákladní – výhled</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
+      <tr><td class="k">Celkem – bez záměru</td><td class="v">${fmt(p.total_ss)}</td></tr>
+      <tr><td class="k">Celkem – se záměrem</td><td class="v">${fmt(p.total_vyhl)}</td></tr>
+      <tr><td class="k">Nákladní – bez záměru</td><td class="v">${fmt(p.heavy_ss)}</td></tr>
+      <tr><td class="k">Nákladní – se záměrem</td><td class="v">${fmt(p.heavy_vyhl)}</td></tr>
       <tr><td class="k">Změna – celkem</td><td class="v">${fmtChange(chg.total.diff, chg.total.pct, chg.total.isNew)}</td></tr>
       <tr><td class="k">Změna – nákladní</td><td class="v">${fmtChange(chg.heavy.diff, chg.heavy.pct, chg.heavy.isNew)}</td></tr>
     </table>

@@ -124,14 +124,14 @@ měru<!DOCTYPE html>
 
   <div class="sb-section">
     <h1>Modelové dopady zprovoznění PO 511, přeložky I/12 a dalších staveb (akt. 26.10.2026)</h1>
-    <p class="sub">Vizualizace předběžně očekávaných změn intenzit</p>
+    <p class="sub">Vizualizace předběžně očekávaných změn zit</p>
   </div>
 
   <div class="sb-section">
     <h2>Režim zobrazení</h2>
     <select id="modeSelect">
-      <option value="ss">Intenzity – výhled bez záměru</option>
-      <option value="vyhl">Intenzity – výhled se záměrem</option>
+   <!--   <option value="ss">Intenzity – výhled bez záměru</option>
+      <option value="vyhl">Intenzity – výhled se záměrem</option>-->
       <option value="diff">Rozdíl (se záměrem - bez záměru)</option>
       <option value="diff_pct">Rozdíl v procentech</option>
     </select>
@@ -211,8 +211,8 @@ let layerById = new Map();      // UsekId -> L.Polyline (aktuálně vykreslená 
    oddělené lomítkem.
    ====================================================================== */
 const LABEL_MODE_OPTIONS = [
-  { key: 'ss',       label: 'Bez záměru' },
-  { key: 'vyhl',     label: 'Se záměrem' },
+//  { key: 'ss',       label: 'Bez záměru' },
+//  { key: 'vyhl',     label: 'Se záměrem' },
   { key: 'diff',     label: 'Rozdíl' },
   { key: 'diff_pct', label: 'Rozdíl v %' },
 ];

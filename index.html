@@ -1,4 +1,4 @@
-měru<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="cs">
 <head>
 <meta charset="UTF-8">
@@ -129,12 +129,7 @@ měru<!DOCTYPE html>
 
   <div class="sb-section">
     <h2>Režim zobrazení</h2>
-    <select id="modeSelect">
-   <!--   <option value="ss">Intenzity – výhled bez záměru</option>
-      <option value="vyhl">Intenzity – výhled se záměrem</option>-->
-      <option value="diff">Rozdíl (se záměrem - bez záměru)</option>
-      <option value="diff_pct">Rozdíl v procentech</option>
-    </select>
+    <select id="modeSelect"></select>
 
     <h2 style="margin-top:12px;">Vozidla</h2>
     <select id="vehicleSelect">
@@ -196,7 +191,7 @@ měru<!DOCTYPE html>
 let map, lineLayer, labelLayer;
 let features = [];              // pole {id, props:{...}, latlngs:[...]}
 let notesByUsek = new Map();    // UsekId -> [ {autor, text, cas} ]
-let currentMode = 'ss';         // ss | vyhl | diff | diff_pct
+let currentMode = 'diff';       // výchozí režim; povolené režimy definuje AVAILABLE_MODES
 let currentVehicle = 'total';   // total | heavy
 let layerById = new Map();      // UsekId -> L.Polyline (aktuálně vykreslená vrstva)
 
@@ -204,25 +199,39 @@ let layerById = new Map();      // UsekId -> L.Polyline (aktuálně vykreslená 
    VARIANTY POPISKŮ
    Zobrazení popisku je nezávislé na "režimu" (ten řídí jen grafiku čáry -
    barvu, tloušťku, filtr). Popisek se skládá ze dvou nezávislých výběrů:
-   - veličina (režim): ss / vyhl / diff / diff_pct - lze vybrat 0 až 4,
-     při 0 se popisky nezobrazí vůbec
+   - veličina (režim): jen povolené režimy z AVAILABLE_MODES,
+     při výběru 0 variant se popisky nezobrazí vůbec
    - vozidla: total / heavy - vždy musí být vybráno alespoň jedno
    Zobrazí se všechny kombinace vybrané veličiny x vybraného vozidla,
    oddělené lomítkem.
    ====================================================================== */
-const LABEL_MODE_OPTIONS = [
-//  { key: 'ss',       label: 'Bez záměru' },
-//  { key: 'vyhl',     label: 'Se záměrem' },
-  { key: 'diff',     label: 'Rozdíl' },
-  { key: 'diff_pct', label: 'Rozdíl v %' },
-];
+// JEDINÉ místo určující dostupné režimy mapy a popisků.
+// Historické režimy 'ss' a 'vyhl' nejsou povolené, ani když někdo
+// omylem přidá jejich <option> nebo obnoví starý stav prohlížeče.
+const AVAILABLE_MODES = Object.freeze([
+  Object.freeze({ key: 'diff', selectLabel: 'Rozdíl (se záměrem - bez záměru)', label: 'Rozdíl' }),
+  Object.freeze({ key: 'diff_pct', selectLabel: 'Rozdíl v procentech', label: 'Rozdíl v %' }),
+]);
+const ALLOWED_MODE_KEYS = new Set(AVAILABLE_MODES.map(m => m.key));
+const DEFAULT_MODE = 'diff';
+const LABEL_MODE_OPTIONS = AVAILABLE_MODES;
+function normalizeMode(mode) {
+  return ALLOWED_MODE_KEYS.has(mode) ? mode : DEFAULT_MODE;
+}
+function renderModeOptions() {
+  // Přepisuje celý select, tedy i případné omylem vložené HTML option.
+  const select = document.getElementById('modeSelect');
+  select.replaceChildren(...AVAILABLE_MODES.map(m => new Option(m.selectLabel, m.key)));
+  currentMode = normalizeMode(currentMode);
+  select.value = currentMode;
+}
 const LABEL_VEHICLE_OPTIONS = [
   { key: 'total', label: 'Všechna vozidla' },
   { key: 'heavy', label: 'Nad 3,5 t' },
 ];
 
 // implicitně vybraná varianta odpovídá výchozímu režimu/vozidlu
-let selectedLabelModes = new Set(['ss']);
+let selectedLabelModes = new Set(['diff']);
 let selectedLabelVehicles = new Set(['total']);
 
 const COLOR_PURPLE = '#8e44ad';
@@ -637,7 +646,7 @@ function fmt(n) { return Math.round(n).toLocaleString('cs-CZ'); }
 function fmtChange(diff, pct, isNew) {
   const sign = diff > 0 ? '+' : '';
   const diffStr = `${sign}${fmt(diff)}`;
-  const pctStr = isNew ? 'nový úsek' : `${sign}${pct.toFixed(1).replace('.', ',')} %`;
+  const pctStr = isNew ? 'nový úsek' : pct === null ? '–' : `${sign}${pct.toFixed(1).replace('.', ',')} %`;
   return `${diffStr} (${pctStr})`;
 }
 
@@ -937,6 +946,8 @@ function updateLabelLockStyles() {
 
 // Volá se při změně režimu zobrazení (grafiky čáry, modeSelect).
 function adjustLabelSelectionOnRegimeChange() {
+  currentMode = normalizeMode(currentMode);
+  selectedLabelModes = new Set([...selectedLabelModes].filter(k => ALLOWED_MODE_KEYS.has(k)));
   if (selectedLabelModes.size === 0) { updateLabelLockStyles(); return; }  // žádný popisek -> žádný popisek
   if (selectedLabelModes.has(currentMode)) { updateLabelLockStyles(); return; } // B je vybráno -> beze změny
   selectedLabelModes = new Set([currentMode]);                            // jinak -> jen B
@@ -961,9 +972,9 @@ const UI_STATE_KEY = 'uiState';
 
 function saveUiState() {
   const state = {
-    mode: currentMode,
+    mode: normalizeMode(currentMode),
     vehicle: currentVehicle,
-    labelModes: Array.from(selectedLabelModes),
+    labelModes: Array.from(selectedLabelModes).filter(k => ALLOWED_MODE_KEYS.has(k)),
     labelVehicles: Array.from(selectedLabelVehicles),
     notesOnly: document.getElementById('notesFilter').checked,
     filterMin: document.getElementById('valueFilterMin').value,
@@ -999,18 +1010,32 @@ async function main() {
     document.getElementById('valueFilterHint').textContent = `Rozsah v jednotkách: ${valueFilterUnitLabel()}`;
   }
 
+  // Nabídku vždy sestav z povolených režimů, nikoli ze zakomentovaného HTML.
+  renderModeOptions();
+
   // Obnovit uložené nastavení (pokud existuje), než se napojí event handlery
   const savedState = loadUiState();
   if (savedState) {
-    if (savedState.mode) { currentMode = savedState.mode; document.getElementById('modeSelect').value = savedState.mode; }
-    if (savedState.vehicle) { currentVehicle = savedState.vehicle; document.getElementById('vehicleSelect').value = savedState.vehicle; }
+    // Starší uložený režim může obsahovat nyní skryté varianty ss/vyhl.
+    // Nepoužívej hodnotu, která už není v dostupných možnostech selectu.
+    currentMode = normalizeMode(savedState.mode);
+    document.getElementById('modeSelect').value = currentMode;
+
+    const allowedVehicles = new Set(Array.from(document.getElementById('vehicleSelect').options, o => o.value));
+    currentVehicle = allowedVehicles.has(savedState.vehicle) ? savedState.vehicle : 'total';
+    document.getElementById('vehicleSelect').value = currentVehicle;
+
     if (Array.isArray(savedState.labelModes)) {
       const valid = savedState.labelModes.filter(k => LABEL_MODE_OPTIONS.some(m => m.key === k));
-      selectedLabelModes = new Set(valid);
+      // Výslovně prázdný výběr znamená záměrně vypnuté popisky.
+      // Jestliže ale byly vybrány pouze nyní nedostupné varianty,
+      // převedeme je na výchozí rozdíl místo nechtěného vypnutí popisků.
+      selectedLabelModes = new Set(valid.length || savedState.labelModes.length === 0
+        ? valid : ['diff']);
     }
     if (Array.isArray(savedState.labelVehicles)) {
       const valid = savedState.labelVehicles.filter(k => LABEL_VEHICLE_OPTIONS.some(v => v.key === k));
-      if (valid.length) selectedLabelVehicles = new Set(valid);   // aspoň jedno musí zůstat vybrané
+      if (valid.length) selectedLabelVehicles = new Set(valid);
     }
     if (typeof savedState.notesOnly === 'boolean') document.getElementById('notesFilter').checked = savedState.notesOnly;
     if (savedState.filterMin) document.getElementById('valueFilterMin').value = savedState.filterMin;
@@ -1023,7 +1048,8 @@ async function main() {
   adjustLabelSelectionOnVehicleChange();
 
   document.getElementById('modeSelect').onchange = (e) => {
-    currentMode = e.target.value;
+    currentMode = normalizeMode(e.target.value);
+    if (e.target.value !== currentMode) renderModeOptions();
     document.getElementById('valueFilterMin').value = '';
     document.getElementById('valueFilterMax').value = '';
     updateValueFilterUI();
@@ -1080,6 +1106,8 @@ async function main() {
   map.on('moveend zoomend', saveUiState);
 
   highlightUsekFromUrl();
+  // Uložit také normalizované nastavení, aby se staré volby již neobnovovaly.
+  saveUiState();
 }
 
 main();
